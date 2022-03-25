@@ -5,7 +5,8 @@ members = [
     "wgpu-test",
     "run-wasm",
     "wasm-web-helpers",
+    "its-a-me",
 ]
 
 [patch."https://github.com/gfx-rs/naga"]
-naga = "0.8.5"
+#naga = "0.8.5"

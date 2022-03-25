@@ -1,0 +1,18 @@
+[package]
+name = "its-a-me"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gilrs = "0.8.2"
+glam = { version = "0.20.2", features = ["bytemuck"] }
+kiss-engine-wgpu = { path = "../kiss-engine-wgpu" }
+parking_lot = "0.12.0"
+wgpu = { git = "https://github.com/gfx-rs/wgpu" }
+libsm64 = { git = "https://github.com/nickmass/libsm64-rust"  }
+winit = "0.26.1"
+dolly = "0.2.0"
+bytemuck = { version = "1.8.0", features = ["derive"] }
+rand = "0.8.5"
+pollster = "0.2.5"
+env_logger = "0.9.0"

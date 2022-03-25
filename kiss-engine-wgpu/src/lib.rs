@@ -332,7 +332,7 @@ impl<'a> BindingResource<'a> {
 }
 
 struct Texture {
-    texture: wgpu::TextureView,
+    texture: Resource<wgpu::TextureView>,
     extent: wgpu::Extent3d,
 }
 
@@ -499,12 +499,12 @@ impl Device {
         }
     }
 
-    pub fn get_texture(&self, descriptor: &wgpu::TextureDescriptor<'static>) -> &wgpu::TextureView {
+    pub fn get_texture(&self, descriptor: &wgpu::TextureDescriptor<'static>) -> &Resource<wgpu::TextureView> {
         let name = descriptor.label.unwrap();
 
         let create_texture_fn = || {
             Texture {
-                texture: self.inner.create_texture(descriptor).create_view(&Default::default()),
+                texture: self.create_resource(self.inner.create_texture(descriptor).create_view(&Default::default())),
                 extent: descriptor.size,
             }
         };
@@ -512,7 +512,9 @@ impl Device {
         let texture = self.textures.get_or_insert_with(name, create_texture_fn);
 
         if descriptor.size != texture.extent {
-            &self.textures.insert_or_replace(name, create_texture_fn()).texture
+            let texture = self.textures.insert_or_replace(name, create_texture_fn());
+
+            &texture.texture
         } else {
             &texture.texture
         }
