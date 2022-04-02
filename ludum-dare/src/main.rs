@@ -88,34 +88,25 @@ fn main() {
     let mut device = Device::new(device);
 
     let mut player_position = Vec3::new(0.0, 0.0, 0.0);
-    let mut player_facing = 0.0;
 
-    use dolly::prelude::*;
+    let mut orbit = Orbit::from_vector(Vec3::new(0.0, 1.5, -3.5) * 2.5);
 
-    let mut camera: dolly::rig::CameraRig = CameraRig::builder()
-    .with(Position::new(player_position))
-    .with(YawPitch {yaw_degrees:0.0, pitch_degrees:-45.0 })
-    //.with(Smooth::new_position_rotation(1.25 * 20.0, 1.25 * 20.0).predictive(true))
-    .with(Arm::new(Vec3::Z * 10.0))
-    //.with(Smooth::new_position(2.5))
-    //.with(Smooth::new_position(2.5))
-    /*.with(
-        LookAt::new(player_position + Vec3::Y)
-            .tracking_smoothness(1.25)
-            .tracking_predictive(true),
-    )*/
-    .build();
-
-    let view_matrix = glam::Mat4::look_at_rh(
-        camera.final_transform.position,
-        camera.final_transform.position + camera.final_transform.forward(),
-        camera.final_transform.up(),
-    );
+    let view_matrix = {
+        Mat4::look_at_rh(
+            player_position + orbit.as_vector(),
+            player_position,
+            Vec3::Y,
+        )
+    };
 
     let uniform_buffer = device.create_resource(device.inner.create_buffer_init(
         &wgpu::util::BufferInitDescriptor {
             label: Some("uniform buffer"),
-            contents: bytemuck::bytes_of(&Uniforms { matrices: perspective_matrix * view_matrix, player_position, _padding: 0.0, }),
+            contents: bytemuck::bytes_of(&Uniforms {
+                matrices: perspective_matrix * view_matrix,
+                player_position,
+                _padding: 0.0,
+            }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         },
     ));
@@ -175,76 +166,51 @@ fn main() {
             _ => {}
         },
         event::Event::MainEventsCleared => {
-            let current_facing = {
-                let facing = camera.driver_mut::<YawPitch>().yaw_degrees.to_radians();
-
-                facing
-            };
+            let current_facing = { orbit.yaw };
 
             let forwards = kbd.up as i32 - kbd.down as i32;
-            let right = kbd.right as i32 - kbd.left as i32;
-
-            if (forwards, right) != (0, 0) {
-                player_facing = current_facing + match (forwards, right) {
-                    (0, 1) => 90.0_f32.to_radians(),
-                    (0, -1) =>  - 90.0_f32.to_radians(),
-                    (1, 1) =>  45.0_f32.to_radians(),
-                    (1, -1) =>  - 45.0_f32.to_radians(),
-
-                    (-1, -1) =>  - 135.0_f32.to_radians(),
-                    (-1, 1) =>  135.0_f32.to_radians(),
-
-                    (-1, 0) => 180.0_f32.to_radians(),
-
-                    _ => 0.0
-                };
-            }
-
-            let mut movement = -glam::Vec2::new(forwards.abs() as f32, right.abs() as f32);
-
-            if movement != glam::Vec2::ZERO {
-                movement = movement.normalize();
-            }
+            let right = -(kbd.right as i32 - kbd.left as i32);
 
             let delta_time = 1.0 / 60.0;
 
-            player_position.z += movement.x * player_facing.cos() * delta_time * 5.0;
+            if (forwards, right) != (0, 0) {
+                let player_facing = current_facing
+                    + match (forwards, right) {
+                        (0, 1) => 90.0_f32.to_radians(),
+                        (0, -1) => -90.0_f32.to_radians(),
+                        (1, 1) => 45.0_f32.to_radians(),
+                        (1, -1) => -45.0_f32.to_radians(),
 
-            player_position.x -= movement.y * player_facing.sin() * delta_time * 5.0;
+                        (-1, -1) => -135.0_f32.to_radians(),
+                        (-1, 1) => 135.0_f32.to_radians(),
 
-            //player_position.z += movement.y * player_facing.sin() * delta_time * 5.0;
+                        (-1, 0) => 180.0_f32.to_radians(),
 
-            camera.driver_mut::<Position>().position = player_position;
+                        _ => 0.0,
+                    };
 
-            let yaw_pitch = camera.driver_mut::<YawPitch>();
+                player_position +=
+                    Quat::from_rotation_y(player_facing) * Vec3::new(0.0, 0.0, -delta_time * 10.0);
 
-            if yaw_pitch.yaw_degrees != player_facing.to_degrees() {
-                let diff = yaw_degrees - player_facing.to_degrees();
-
-                let x = 1.0_f32.min(diff);
-
-                yaw_pitch.yaw_degrees 
-
-                camera.driver_mut::<YawPitch>().rotate_yaw_pitch(x * 0.1, 0.0);
+                orbit.yaw += short_angle_dist(orbit.yaw, player_facing) * 0.015;
             }
-            /*if movement != glam::Vec2::ZERO {
-                camera.driver_mut::<Rotation>().rotation = Quat::from_rotation_y((push.y).atan2(-push.x));
-            }
-            camera.driver_mut::<LookAt>().target = player_position + Vec3::Y;*/
 
-
-            camera.update(delta_time);
-
-            let view_matrix = glam::Mat4::look_at_rh(
-                camera.final_transform.position,
-                camera.final_transform.position + camera.final_transform.forward(),
-                camera.final_transform.up(),
-            );
+            let view_matrix = {
+                Mat4::look_at_rh(
+                    player_position + orbit.as_vector(),
+                    player_position,
+                    Vec3::Y,
+                )
+            };
 
             queue.write_buffer(
                 &uniform_buffer,
                 0,
-                bytemuck::bytes_of(&Uniforms { matrices: perspective_matrix * view_matrix, player_position, _padding: 0.0 }),
+                bytemuck::bytes_of(&Uniforms {
+                    matrices: perspective_matrix * view_matrix,
+                    player_position,
+                    _padding: 0.0,
+                }),
             );
 
             window.request_redraw();
@@ -384,7 +350,6 @@ fn main() {
                 render_pass.set_index_buffer(capsule.indices.slice(..), wgpu::IndexFormat::Uint32);
 
                 render_pass.draw_indexed(0..capsule.num_indices, 0, 0..1);
-
             }
 
             drop(render_pass);
@@ -443,8 +408,6 @@ impl Model {
                 let read_indices = reader.read_indices().unwrap().into_u32();
 
                 let num_existing_vertices = positions.len();
-
-                let first_index = indices.len();
 
                 indices.extend(read_indices.map(|index| index + num_existing_vertices as u32));
 
@@ -532,7 +495,6 @@ impl NodeTree {
     }
 }
 
-
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct Uniforms {
@@ -581,4 +543,54 @@ impl Mul<Vec3> for Similarity {
     fn mul(self, vector: Vec3) -> Vec3 {
         self.translation + (self.scale * (self.rotation * vector))
     }
+}
+
+pub struct Orbit {
+    pub pitch: f32,
+    pub yaw: f32,
+    distance: f32,
+}
+
+impl Orbit {
+    fn from_vector(vector: Vec3) -> Self {
+        let horizontal_length = (vector.x * vector.x + vector.z * vector.z).sqrt();
+        let pitch = horizontal_length.atan2(vector.y);
+        let distance = vector.length();
+        Self {
+            yaw: 0.0,
+            pitch,
+            distance,
+        }
+    }
+
+    pub fn rotate(&mut self, delta: glam::Vec2) {
+        use std::f32::consts::PI;
+        let speed = 0.15;
+        self.yaw -= delta.x.to_radians() * speed;
+        self.pitch = (self.pitch - delta.y.to_radians() * speed)
+            .max(std::f32::EPSILON)
+            .min(PI / 2.0);
+    }
+
+    pub fn zoom(&mut self, delta: f32) {
+        self.distance = (self.distance + delta * 0.5).max(1.0).min(10.0);
+    }
+
+    fn as_vector(&self) -> Vec3 {
+        let y = self.pitch.cos();
+        let horizontal_amount = self.pitch.sin();
+        let x = horizontal_amount * self.yaw.sin();
+        let z = horizontal_amount * self.yaw.cos();
+        Vec3::new(x, y, z) * self.distance
+    }
+}
+
+fn short_angle_dist(from: f32, to: f32) -> f32 {
+    let max_angle = std::f32::consts::PI * 2.0;
+    let difference = n_mod_m(to - from, max_angle);
+    n_mod_m(2.0 * difference, max_angle) - difference
+}
+
+fn n_mod_m<T: std::ops::Rem<Output = T> + std::ops::Add<Output = T> + Copy>(n: T, m: T) -> T {
+    ((n % m) + m) % m
 }
