@@ -1,6 +1,6 @@
 [[vk::binding(0)]] cbuffer _ {
     row_major float4x4 matrices;
-    float2 player_position;
+    float3 player_position;
     float player_facing;
 };
 
@@ -33,10 +33,7 @@ row_major float3x3 rotation_matrix_y(float theta) {
 Out main(In input) {
     Out output;
 
-    float2 height_map_pos = player_position / 80.0 - 0.5;
-    float height = depth_map_tex.SampleLevel(tex_sampler, height_map_pos, 0);
-
-    float3 p = float3(player_position.x, height, player_position.y);
+    float3 p = player_position;
 
     float3x3 rot = rotation_matrix_y(-player_facing);
 

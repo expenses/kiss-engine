@@ -1,11 +1,9 @@
 use glam::Mat3;
 use glam::Mat4;
 use glam::Quat;
-use glam::Vec3;
 use glam::Vec2;
-use kiss_engine_wgpu::{
-    BindingResource, Device, DeviceWithFormats, RenderPipelineDesc, Resource, VertexBufferLayout,
-};
+use glam::Vec3;
+use kiss_engine_wgpu::{BindingResource, Device, RenderPipelineDesc, VertexBufferLayout};
 use std::ops::*;
 
 use wgpu::util::DeviceExt;
@@ -72,6 +70,12 @@ fn main() {
 
     let plane = Model::new(include_bytes!("../plane.glb"), &device, "plane").unwrap();
     let capsule = Model::new(include_bytes!("../capsule.glb"), &device, "capsule").unwrap();
+    let bounce_sphere = Model::new(
+        include_bytes!("../bounce_sphere.glb"),
+        &device,
+        "bounce_sphere",
+    )
+    .unwrap();
 
     let mut perspective_matrix = perspective_matrix_reversed(size.width, size.height);
 
@@ -111,11 +115,22 @@ fn main() {
             label: Some("uniform buffer"),
             contents: bytemuck::bytes_of(&Uniforms {
                 matrices: perspective_matrix * view_matrix,
-                player_position,
+                player_position: Vec3::new(player_position.x, 0.0, player_position.y),
                 player_facing,
-                _padding: 0,
-
             }),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        },
+    ));
+
+    let mut bounce_sphere_props = BounceSphereProps {
+        position: Vec3::ZERO,
+        scale: 0.0,
+    };
+
+    let bounce_sphere_buffer = device.create_resource(device.inner.create_buffer_init(
+        &wgpu::util::BufferInitDescriptor {
+            label: Some("bounce sphere buffer buffer"),
+            contents: bytemuck::bytes_of(&bounce_sphere_props),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         },
     ));
@@ -132,10 +147,11 @@ fn main() {
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::R32Float,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
         label: Some("height map"),
     });
-
 
     let buffer_size = 1024 * 1024 * 4;
 
@@ -146,123 +162,123 @@ fn main() {
         mapped_at_creation: false,
     });
 
-
     {
-        let mut encoder =
-                device
-                    .inner
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("init encoder"),
-                    });
+        let mut encoder = device
+            .inner
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("init encoder"),
+            });
 
-                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("init render pass"),
-                        color_attachments: &[wgpu::RenderPassColorAttachment {
-                            view: &height_map.view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: 0.0,
-                                    g: 0.0,
-                                    b: 0.0,
-                                    a: 0.0,
-                                }),
-                                store: true,
-                            },
-                        }],
-                        depth_stencil_attachment: None,
-                    });
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("init render pass"),
+            color_attachments: &[wgpu::RenderPassColorAttachment {
+                view: &height_map.view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.0,
+                        g: 0.0,
+                        b: 0.0,
+                        a: 0.0,
+                    }),
+                    store: true,
+                },
+            }],
+            depth_stencil_attachment: None,
+        });
 
-                    let device =
-                    device.with_formats(wgpu::TextureFormat::R32Float, None);
+        let device = device.with_formats(wgpu::TextureFormat::R32Float, None);
 
-                    let pipeline = device.get_pipeline(
-                        "bake pipeline",
-                        device.device.get_shader("shaders/compiled/bake_height_map.vert.spv"),
-                        device.device.get_shader("shaders/compiled/bake_height_map.frag.spv"),
-                        RenderPipelineDesc {
-                            primitive: wgpu::PrimitiveState::default(),
-                            ..Default::default()
-                        },
-                        &[
-                            VertexBufferLayout {
-                                location: 0,
-                                format: wgpu::VertexFormat::Float32x3,
-                                step_mode: wgpu::VertexStepMode::Vertex,
-                            },
-                            VertexBufferLayout {
-                                location: 1,
-                                format: wgpu::VertexFormat::Float32x2,
-                                step_mode: wgpu::VertexStepMode::Vertex,
-                            },
-                        ],
-                    );
+        let pipeline = device.get_pipeline(
+            "bake pipeline",
+            device
+                .device
+                .get_shader("shaders/compiled/bake_height_map.vert.spv"),
+            device
+                .device
+                .get_shader("shaders/compiled/bake_height_map.frag.spv"),
+            RenderPipelineDesc {
+                primitive: wgpu::PrimitiveState::default(),
+                ..Default::default()
+            },
+            &[
+                VertexBufferLayout {
+                    location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                },
+                VertexBufferLayout {
+                    location: 1,
+                    format: wgpu::VertexFormat::Float32x2,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                },
+            ],
+        );
 
-                    let bind_group = device.get_bind_group(
-                        "bake height map bind group",
-                        pipeline,
-                        &[],
-                    );
+        let bind_group = device.get_bind_group("bake height map bind group", pipeline, &[]);
 
-                    render_pass.set_pipeline(&pipeline.pipeline);
-                    render_pass.set_bind_group(0, bind_group, &[]);
+        render_pass.set_pipeline(&pipeline.pipeline);
+        render_pass.set_bind_group(0, bind_group, &[]);
 
-                    render_pass.set_vertex_buffer(0, plane.positions.slice(..));
-                    render_pass.set_vertex_buffer(1, plane.uvs.slice(..));
-                    render_pass.set_index_buffer(plane.indices.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.set_vertex_buffer(0, plane.positions.slice(..));
+        render_pass.set_vertex_buffer(1, plane.uvs.slice(..));
+        render_pass.set_index_buffer(plane.indices.slice(..), wgpu::IndexFormat::Uint32);
 
-                    render_pass.draw_indexed(0..plane.num_indices, 0, 0..1);
+        render_pass.draw_indexed(0..plane.num_indices, 0, 0..1);
 
+        drop(render_pass);
 
-                    drop(render_pass);
+        encoder.copy_texture_to_buffer(
+            wgpu::ImageCopyTexture {
+                texture: &height_map.texture,
+                mip_level: 0,
+                origin: Default::default(),
+                aspect: Default::default(),
+            },
+            wgpu::ImageCopyBuffer {
+                buffer: &target_buffer,
+                layout: wgpu::ImageDataLayout {
+                    bytes_per_row: Some(std::num::NonZeroU32::new(1024 * 4).unwrap()),
+                    ..Default::default()
+                },
+            },
+            wgpu::Extent3d {
+                width: 1024,
+                height: 1024,
+                depth_or_array_layers: 1,
+            },
+        );
 
-                    encoder.copy_texture_to_buffer(wgpu::ImageCopyTexture {
-                        texture: &height_map.texture,
-                        mip_level: 0,
-                        origin: Default::default(),
-                        aspect: Default::default()
-                    }, wgpu::ImageCopyBuffer {
-                        buffer: &target_buffer,
-                        layout: wgpu::ImageDataLayout {
-                            bytes_per_row: Some(std::num::NonZeroU32::new(1024 * 4).unwrap()),
-                            ..Default::default()
-                        },
-                    }, wgpu::Extent3d {
-                        width: 1024,
-                        height: 1024,
-                        depth_or_array_layers: 1,
-                    });
-
-
-
-            queue.submit(std::iter::once(encoder.finish()));
+        queue.submit(std::iter::once(encoder.finish()));
     }
 
-    let slice = target_buffer.slice(..);
+    let heightmap = {
+        let slice = target_buffer.slice(..);
 
-    let map_future = slice.map_async(wgpu::MapMode::Read);
+        let map_future = slice.map_async(wgpu::MapMode::Read);
 
-    device.inner.poll(wgpu::Maintain::Wait);
+        device.inner.poll(wgpu::Maintain::Wait);
 
-    pollster::block_on(map_future).unwrap();
+        pollster::block_on(map_future).unwrap();
 
-    let bytes = slice.get_mapped_range();
+        let bytes = slice.get_mapped_range();
 
-    dbg!(bytes.len());
+        HeightMap {
+            floats: bytemuck::cast_slice(&bytes).to_vec(),
+            height: 1024,
+            width: 1024,
+        }
+    };
 
-    std::fs::write("heightmap", bytes).unwrap();
+    target_buffer.unmap();
 
-    drop(height_map);
+    drop(target_buffer);
 
-    let sampler = device.create_resource(
-        device
-            .inner
-            .create_sampler(&wgpu::SamplerDescriptor {
-                address_mode_u: wgpu::AddressMode::Repeat,
-                address_mode_v: wgpu::AddressMode::Repeat,
-                ..Default::default()
-            }),
-    );
+    let _sampler = device.create_resource(device.inner.create_sampler(&wgpu::SamplerDescriptor {
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::Repeat,
+        ..Default::default()
+    }));
 
     event_loop.run(move |event, _, control_flow| match event {
         event::Event::WindowEvent {
@@ -314,6 +330,16 @@ fn main() {
                     VirtualKeyCode::C if pressed => {
                         orbit.yaw = player_facing;
                     }
+                    VirtualKeyCode::B if pressed => {
+                        let player_position = Vec3::new(
+                            player_position.x,
+                            heightmap.sample(player_position / 80.0 + 0.5),
+                            player_position.y,
+                        );
+
+                        bounce_sphere_props.scale = 1.0;
+                        bounce_sphere_props.position = player_position + Vec3::Y * 2.0;
+                    }
                     _ => {}
                 }
             }
@@ -328,7 +354,7 @@ fn main() {
             let delta_time = 1.0 / 60.0;
 
             if (forwards, right) != (0, 0) {
-                player_facing = current_facing
+                let new_player_facing = current_facing
                     + match (forwards, right) {
                         (0, 1) => 90.0_f32.to_radians(),
                         (0, -1) => -90.0_f32.to_radians(),
@@ -343,6 +369,8 @@ fn main() {
                         _ => 0.0,
                     };
 
+                player_facing += short_angle_dist(player_facing, new_player_facing) * 0.5;
+
                 orbit.yaw += short_angle_dist(orbit.yaw, player_facing) * 0.015;
 
                 player_speed = (player_speed + delta_time).min(1.0);
@@ -351,18 +379,36 @@ fn main() {
             }
 
             let movement = Quat::from_rotation_y(player_facing)
-            * Vec3::new(0.0, 0.0, -delta_time * 10.0 * player_speed);
+                * Vec3::new(0.0, 0.0, -delta_time * 10.0 * player_speed);
 
             player_position.x += movement.x;
             player_position.y += movement.z;
 
+            let player_position = Vec3::new(
+                player_position.x,
+                heightmap.sample(player_position / 80.0 + 0.5),
+                player_position.y,
+            );
+
             let view_matrix = {
                 Mat4::look_at_rh(
-                    map_to_3d(player_position) + orbit.as_vector(),
-                    map_to_3d(player_position),
+                    player_position + orbit.as_vector(),
+                    player_position,
                     Vec3::Y,
                 )
             };
+
+            bounce_sphere_props.scale += bounce_sphere_props.scale * delta_time;
+
+            if bounce_sphere_props.scale > 3.0 {
+                bounce_sphere_props.scale = 0.0;
+            }
+
+            queue.write_buffer(
+                &bounce_sphere_buffer,
+                0,
+                bytemuck::bytes_of(&bounce_sphere_props),
+            );
 
             queue.write_buffer(
                 &uniform_buffer,
@@ -371,7 +417,6 @@ fn main() {
                     matrices: perspective_matrix * view_matrix,
                     player_position,
                     player_facing,
-                    _padding: 0,
                 }),
             );
 
@@ -467,8 +512,7 @@ fn main() {
                     ],
                 );
 
-                let height_map = device.device.try_get_cached_texture("height map").unwrap();
-
+                let _height_map = device.device.try_get_cached_texture("height map").unwrap();
 
                 let bind_group = device.get_bind_group(
                     "plane bind group",
@@ -489,7 +533,9 @@ fn main() {
 
                 let pipeline = device.get_pipeline(
                     "capsule pipeline",
-                    device.device.get_shader("shaders/compiled/capsule.vert.spv"),
+                    device
+                        .device
+                        .get_shader("shaders/compiled/capsule.vert.spv"),
                     device.device.get_shader("shaders/compiled/plane.frag.spv"),
                     RenderPipelineDesc {
                         ..Default::default()
@@ -511,7 +557,7 @@ fn main() {
                 let bind_group = device.get_bind_group(
                     "capsule bind group",
                     pipeline,
-                    &[BindingResource::Buffer(&uniform_buffer), BindingResource::Texture(&height_map), BindingResource::Sampler(&sampler)],
+                    &[BindingResource::Buffer(&uniform_buffer)],
                 );
 
                 render_pass.set_pipeline(&pipeline.pipeline);
@@ -522,6 +568,50 @@ fn main() {
                 render_pass.set_index_buffer(capsule.indices.slice(..), wgpu::IndexFormat::Uint32);
 
                 render_pass.draw_indexed(0..capsule.num_indices, 0, 0..1);
+
+                let pipeline = device.get_pipeline(
+                    "bounce sphere pipeline",
+                    device
+                        .device
+                        .get_shader("shaders/compiled/bounce_sphere.vert.spv"),
+                    device
+                        .device
+                        .get_shader("shaders/compiled/bounce_sphere.frag.spv"),
+                    RenderPipelineDesc {
+                        ..Default::default()
+                    },
+                    &[
+                        VertexBufferLayout {
+                            location: 0,
+                            format: wgpu::VertexFormat::Float32x3,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                        },
+                        VertexBufferLayout {
+                            location: 1,
+                            format: wgpu::VertexFormat::Float32x3,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                        },
+                    ],
+                );
+
+                let bind_group = device.get_bind_group(
+                    "bounce sphere bind group",
+                    pipeline,
+                    &[
+                        BindingResource::Buffer(&uniform_buffer),
+                        BindingResource::Buffer(&bounce_sphere_buffer),
+                    ],
+                );
+
+                render_pass.set_pipeline(&pipeline.pipeline);
+                render_pass.set_bind_group(0, bind_group, &[]);
+
+                render_pass.set_vertex_buffer(0, bounce_sphere.positions.slice(..));
+                render_pass.set_vertex_buffer(1, bounce_sphere.normals.slice(..));
+                render_pass
+                    .set_index_buffer(bounce_sphere.indices.slice(..), wgpu::IndexFormat::Uint32);
+
+                render_pass.draw_indexed(0..bounce_sphere.num_indices, 0, 0..1);
             }
 
             drop(render_pass);
@@ -599,8 +689,13 @@ impl Model {
                         .map(|normal| transform.rotation * Vec3::from(normal)),
                 );
 
-                println!("{}", name);
-                uvs.extend(reader.read_tex_coords(0).unwrap().into_f32().map(|uv| Vec2::from(uv)));
+                uvs.extend(
+                    reader
+                        .read_tex_coords(0)
+                        .unwrap()
+                        .into_f32()
+                        .map(Vec2::from),
+                );
             }
         }
 
@@ -681,9 +776,15 @@ impl NodeTree {
 #[repr(C)]
 pub struct Uniforms {
     pub matrices: Mat4,
-    pub player_position: Vec2,
+    pub player_position: Vec3,
     pub player_facing: f32,
-    _padding: u32,
+}
+
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct BounceSphereProps {
+    pub position: Vec3,
+    pub scale: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -776,4 +877,43 @@ fn short_angle_dist(from: f32, to: f32) -> f32 {
 
 fn n_mod_m<T: std::ops::Rem<Output = T> + std::ops::Add<Output = T> + Copy>(n: T, m: T) -> T {
     ((n % m) + m) % m
+}
+
+struct HeightMap {
+    floats: Vec<f32>,
+    height: u32,
+    width: u32,
+}
+
+impl HeightMap {
+    fn sample(&self, position: Vec2) -> f32 {
+        let position = position * Vec2::new(self.width as f32, self.height as f32);
+
+        let x = (position.x as u32).max(0).min(self.width - 1);
+        let y = (position.y as u32).max(0).min(self.height - 1);
+
+        let fractional_x = position.x % 1.0;
+        let fractional_y = position.y % 1.0;
+
+        fn lerp(x: f32, y: f32, f: f32) -> f32 {
+            x * (1.0 - f) + y * f
+        }
+
+        let other_x = (x + 1).min(self.width - 1);
+        let other_y = (y + 1).min(self.height - 1);
+
+        let row_1 = lerp(self.fetch(x, y), self.fetch(other_x, y), fractional_x);
+        let row_2 = lerp(
+            self.fetch(x, other_y),
+            self.fetch(other_x, other_y),
+            fractional_x,
+        );
+        lerp(row_1, row_2, fractional_y)
+    }
+
+    fn fetch(&self, x: u32, y: u32) -> f32 {
+        let pos = (y * self.width + x) as usize;
+
+        self.floats[pos]
+    }
 }
