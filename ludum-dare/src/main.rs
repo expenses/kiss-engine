@@ -4,6 +4,7 @@ use glam::Quat;
 use glam::Vec2;
 use glam::Vec3;
 use kiss_engine_wgpu::{BindingResource, Device, RenderPipelineDesc, VertexBufferLayout};
+use rand::Rng;
 use std::ops::*;
 
 use wgpu::util::DeviceExt;
@@ -76,6 +77,7 @@ fn main() {
         "bounce_sphere",
     )
     .unwrap();
+    let water = Model::new(include_bytes!("../water.glb"), &device, "water").unwrap();
 
     let mut perspective_matrix = perspective_matrix_reversed(size.width, size.height);
 
@@ -96,16 +98,12 @@ fn main() {
     let mut player_speed: f32 = 0.0;
     let mut player_facing = 0.0;
 
-    fn map_to_3d(position: Vec2) -> Vec3 {
-        Vec3::new(position.x, 0.0, position.y)
-    }
-
     let mut orbit = Orbit::from_vector(Vec3::new(0.0, 1.5, -3.5) * 2.5);
 
     let view_matrix = {
         Mat4::look_at_rh(
-            map_to_3d(player_position) + orbit.as_vector(),
-            map_to_3d(player_position),
+            Vec3::new(player_position.x, 0.0, player_position.y) + orbit.as_vector(),
+            Vec3::new(player_position.x, 0.0, player_position.y),
             Vec3::Y,
         )
     };
@@ -126,6 +124,22 @@ fn main() {
         position: Vec3::ZERO,
         scale: 0.0,
     };
+
+    let mut meteor_props = MeteorProps {
+        position: Vec3::Y * 100.0,
+        velocity: Vec3::ZERO,
+    };
+
+    let meteor_buffer = device.create_resource(device.inner.create_buffer_init(
+        &wgpu::util::BufferInitDescriptor {
+            label: Some("meteor buffer"),
+            contents: bytemuck::bytes_of(&MeteorGpuProps {
+                position: meteor_props.position,
+                _padding: 0,
+            }),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        },
+    ));
 
     let bounce_sphere_buffer = device.create_resource(device.inner.create_buffer_init(
         &wgpu::util::BufferInitDescriptor {
@@ -251,6 +265,8 @@ fn main() {
 
         queue.submit(std::iter::once(encoder.finish()));
     }
+
+    let mut rng = rand::thread_rng();
 
     let heightmap = {
         let slice = target_buffer.slice(..);
@@ -384,6 +400,9 @@ fn main() {
             player_position.x += movement.x;
             player_position.y += movement.z;
 
+            player_position.x = player_position.x.max(-40.0).min(40.0);
+            player_position.y = player_position.y.max(-40.0).min(40.0);
+
             let player_position = Vec3::new(
                 player_position.x,
                 heightmap.sample(player_position / 80.0 + 0.5),
@@ -403,6 +422,46 @@ fn main() {
             if bounce_sphere_props.scale > 3.0 {
                 bounce_sphere_props.scale = 0.0;
             }
+
+            meteor_props.velocity.y -= delta_time * 5.0;
+
+            if (meteor_props.position.x + meteor_props.velocity.x * delta_time).abs() > 40.0 {
+                meteor_props.velocity.x *= -1.0;
+            }
+
+            if (meteor_props.position.z + meteor_props.velocity.z * delta_time).abs() > 40.0 {
+                meteor_props.velocity.z *= -1.0;
+            }
+
+            meteor_props.position += meteor_props.velocity * delta_time;
+
+            let height = heightmap
+                .sample(Vec2::new(meteor_props.position.x, meteor_props.position.z) / 80.0 + 0.5);
+
+            if bounce_sphere_props.scale > 0.0
+                && meteor_props.position.distance(bounce_sphere_props.position)
+                    < (bounce_sphere_props.scale + 2.0)
+            {
+                println!("Bounced!");
+                meteor_props.velocity.y = meteor_props.velocity.y.abs();
+
+                let rotation = rng.gen_range(0.0..=std::f32::consts::TAU);
+                let velocity = rng.gen_range(1.0..=5.0);
+
+                meteor_props.velocity.x = velocity * rotation.cos();
+                meteor_props.velocity.z = velocity * rotation.sin();
+            } else if meteor_props.position.y < height {
+                println!("You Suck");
+            }
+
+            queue.write_buffer(
+                &meteor_buffer,
+                0,
+                bytemuck::bytes_of(&MeteorGpuProps {
+                    position: meteor_props.position,
+                    _padding: 0,
+                }),
+            );
 
             queue.write_buffer(
                 &bounce_sphere_buffer,
@@ -517,7 +576,10 @@ fn main() {
                 let bind_group = device.get_bind_group(
                     "plane bind group",
                     pipeline,
-                    &[BindingResource::Buffer(&uniform_buffer)],
+                    &[
+                        BindingResource::Buffer(&uniform_buffer),
+                        BindingResource::Buffer(&meteor_buffer),
+                    ],
                 );
 
                 render_pass.set_pipeline(&pipeline.pipeline);
@@ -536,7 +598,9 @@ fn main() {
                     device
                         .device
                         .get_shader("shaders/compiled/capsule.vert.spv"),
-                    device.device.get_shader("shaders/compiled/plane.frag.spv"),
+                    device
+                        .device
+                        .get_shader("shaders/compiled/capsule.frag.spv"),
                     RenderPipelineDesc {
                         ..Default::default()
                     },
@@ -570,6 +634,92 @@ fn main() {
                 render_pass.draw_indexed(0..capsule.num_indices, 0, 0..1);
 
                 let pipeline = device.get_pipeline(
+                    "meteor pipeline",
+                    device.device.get_shader("shaders/compiled/meteor.vert.spv"),
+                    device
+                        .device
+                        .get_shader("shaders/compiled/bounce_sphere.frag.spv"),
+                    RenderPipelineDesc {
+                        ..Default::default()
+                    },
+                    &[
+                        VertexBufferLayout {
+                            location: 0,
+                            format: wgpu::VertexFormat::Float32x3,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                        },
+                        VertexBufferLayout {
+                            location: 1,
+                            format: wgpu::VertexFormat::Float32x3,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                        },
+                    ],
+                );
+
+                let bind_group = device.get_bind_group(
+                    "meteor bind group",
+                    pipeline,
+                    &[
+                        BindingResource::Buffer(&uniform_buffer),
+                        BindingResource::Buffer(&meteor_buffer),
+                    ],
+                );
+
+                render_pass.set_pipeline(&pipeline.pipeline);
+                render_pass.set_bind_group(0, bind_group, &[]);
+
+                render_pass.set_vertex_buffer(0, bounce_sphere.positions.slice(..));
+                render_pass.set_vertex_buffer(1, bounce_sphere.normals.slice(..));
+                render_pass
+                    .set_index_buffer(bounce_sphere.indices.slice(..), wgpu::IndexFormat::Uint32);
+
+                render_pass.draw_indexed(0..bounce_sphere.num_indices, 0, 0..1);
+
+                let pipeline = device.get_pipeline(
+                    "water pipeline",
+                    device.device.get_shader("shaders/compiled/plane.vert.spv"),
+                    device.device.get_shader("shaders/compiled/water.frag.spv"),
+                    RenderPipelineDesc {
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        ..Default::default()
+                    },
+                    &[
+                        VertexBufferLayout {
+                            location: 0,
+                            format: wgpu::VertexFormat::Float32x3,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                        },
+                        VertexBufferLayout {
+                            location: 1,
+                            format: wgpu::VertexFormat::Float32x3,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                        },
+                        VertexBufferLayout {
+                            location: 2,
+                            format: wgpu::VertexFormat::Float32x2,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                        },
+                    ],
+                );
+
+                let bind_group = device.get_bind_group(
+                    "water bind group",
+                    pipeline,
+                    &[BindingResource::Buffer(&uniform_buffer)],
+                );
+
+                render_pass.set_pipeline(&pipeline.pipeline);
+                render_pass.set_bind_group(0, bind_group, &[]);
+
+                render_pass.set_vertex_buffer(0, water.positions.slice(..));
+                render_pass.set_vertex_buffer(1, water.normals.slice(..));
+
+                render_pass.set_vertex_buffer(2, water.uvs.slice(..));
+                render_pass.set_index_buffer(water.indices.slice(..), wgpu::IndexFormat::Uint32);
+
+                render_pass.draw_indexed(0..water.num_indices, 0, 0..1);
+
+                let pipeline = device.get_pipeline(
                     "bounce sphere pipeline",
                     device
                         .device
@@ -578,6 +728,8 @@ fn main() {
                         .device
                         .get_shader("shaders/compiled/bounce_sphere.frag.spv"),
                     RenderPipelineDesc {
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+
                         ..Default::default()
                     },
                     &[
@@ -785,6 +937,18 @@ pub struct Uniforms {
 pub struct BounceSphereProps {
     pub position: Vec3,
     pub scale: f32,
+}
+
+pub struct MeteorProps {
+    pub position: Vec3,
+    pub velocity: Vec3,
+}
+
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct MeteorGpuProps {
+    pub position: Vec3,
+    pub _padding: u32,
 }
 
 #[derive(Clone, Copy)]

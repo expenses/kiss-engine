@@ -16,7 +16,10 @@ Out main(In input) {
 
     float diffuse = max(dot(normalize(input.normal), SUN_DIR), 0.0);
 
-    output.color = float4(float3(diffuse), 1.0);
+
+    float alpha = 0.5;
+
+    output.color = float4(float3(0.5, 0.0, 0.5) * alpha, alpha);
 
     return output;
 }

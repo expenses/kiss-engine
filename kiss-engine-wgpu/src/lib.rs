@@ -117,6 +117,7 @@ pub struct RenderPipelineDesc {
     pub depth_compare: wgpu::CompareFunction,
     pub multisample: wgpu::MultisampleState,
     pub multiview: Option<std::num::NonZeroU32>,
+    pub blend: Option<wgpu::BlendState>,
 }
 
 impl Default for RenderPipelineDesc {
@@ -130,6 +131,7 @@ impl Default for RenderPipelineDesc {
             depth_compare: wgpu::CompareFunction::Greater,
             multisample: Default::default(),
             multiview: None,
+            blend: None,
         }
     }
 }
@@ -185,7 +187,11 @@ fn create_render_pipeline(
         fragment: Some(wgpu::FragmentState {
             module: &fragment_shader.module,
             entry_point: "main",
-            targets: &[attachment_texture_format.into()],
+            targets: &[wgpu::ColorTargetState {
+                format: attachment_texture_format,
+                blend: render_pipeline_desc.blend,
+                write_mask:wgpu::ColorWrites::ALL,
+            }],
         }),
         primitive: render_pipeline_desc.primitive,
         depth_stencil: depth_stencil_attachment_format.map(|format| wgpu::DepthStencilState {
