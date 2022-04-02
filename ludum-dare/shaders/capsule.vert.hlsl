@@ -1,7 +1,11 @@
 [[vk::binding(0)]] cbuffer _ {
     row_major float4x4 matrices;
-    float3 player_position;
+    float2 player_position;
+    float player_facing;
 };
+
+[[vk::binding(1)]] Texture2D<float> depth_map_tex;
+[[vk::binding(2)]] sampler tex_sampler;
 
 struct In {
     [[vk::location(0)]] float3 pos: TEXCOORD0;
@@ -14,12 +18,32 @@ struct Out {
     [[vk::location(1)]] float3 normal: TEXCOORD1;
 };
 
+
+row_major float3x3 rotation_matrix_y(float theta) {
+    float cos = cos(theta);
+    float sin = sin(theta);
+
+    return float3x3(
+        cos, 0, sin,
+        0, 1, 0,
+        -sin, 0, cos
+    );
+}
+
 Out main(In input) {
     Out output;
 
-    output.position = (matrices * float4(player_position + input.pos, 1.0));
+    float2 height_map_pos = player_position / 80.0 - 0.5;
+    float height = depth_map_tex.SampleLevel(tex_sampler, height_map_pos, 0);
+
+    float3 p = float3(player_position.x, height, player_position.y);
+
+    float3x3 rot = rotation_matrix_y(-player_facing);
+
+
+    output.position = (matrices) * float4(p + (rot * input.pos), 1.0);
     output.uv = float2(input.pos.x, input.pos.z);
-    output.normal = input.normal;
+    output.normal = rot * input.normal;
 
     return output;
 }

@@ -61,10 +61,10 @@ fn reflect_bind_group_layout_entries(
                     min_binding_size: None,
                 },
                 rspirv_reflect::DescriptorType::SAMPLER => {
-                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)
+                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering)
                 }
                 rspirv_reflect::DescriptorType::SAMPLED_IMAGE => wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
@@ -224,6 +224,16 @@ impl<K, V> CacheMap<K, V>
 where
     K: Eq + std::hash::Hash,
 {
+    fn try_get(&self, key: &K) -> Option<&V> {
+        if let Some(value) = self.inserting.get(key) {
+            Some(value)
+        } else if let Some(value) = self.map.get(key) {
+            Some(value)
+        } else {
+            None
+        }
+    }
+
     fn get_or_insert_with<F: FnOnce() -> V>(&self, key: K, func: F) -> &V {
         // Check inserting first, in case we're updating something.
         if let Some(value) = self.inserting.get(&key) {
@@ -318,7 +328,7 @@ impl<T> std::ops::Deref for Resource<T> {
 pub enum BindingResource<'a> {
     Buffer(&'a Resource<wgpu::Buffer>),
     Sampler(&'a Resource<wgpu::Sampler>),
-    Texture(&'a Resource<wgpu::TextureView>),
+    Texture(&'a Resource<TextureInner>),
 }
 
 impl<'a> BindingResource<'a> {
@@ -331,8 +341,13 @@ impl<'a> BindingResource<'a> {
     }
 }
 
+pub struct TextureInner {
+    pub texture: wgpu::Texture,
+    pub view: wgpu::TextureView,
+}
+
 struct Texture {
-    texture: Resource<wgpu::TextureView>,
+    texture: Resource<TextureInner>,
     extent: wgpu::Extent3d,
 }
 
@@ -499,12 +514,19 @@ impl Device {
         }
     }
 
-    pub fn get_texture(&self, descriptor: &wgpu::TextureDescriptor<'static>) -> &Resource<wgpu::TextureView> {
+    pub fn get_texture(&self, descriptor: &wgpu::TextureDescriptor<'static>) -> &Resource<TextureInner> {
         let name = descriptor.label.unwrap();
 
         let create_texture_fn = || {
             Texture {
-                texture: self.create_resource(self.inner.create_texture(descriptor).create_view(&Default::default())),
+                texture: self.create_resource({
+                    let texture = self.inner.create_texture(descriptor);
+
+                    TextureInner {
+                        view: texture.create_view(&Default::default()),
+                        texture,
+                    }
+                }),
                 extent: descriptor.size,
             }
         };
@@ -518,6 +540,10 @@ impl Device {
         } else {
             &texture.texture
         }
+    }
+
+    pub fn try_get_cached_texture(&self, name: &'static str) -> Option<&Resource<TextureInner>> {
+        self.textures.try_get(&name).map(|tex| &tex.texture)
     }
 }
 
@@ -569,7 +595,7 @@ impl<'a> DeviceWithFormats<'a> {
                                             wgpu::BindingResource::Sampler(&res.inner)
                                         }
                                         BindingResource::Texture(res) => {
-                                            wgpu::BindingResource::TextureView(&res.inner)
+                                            wgpu::BindingResource::TextureView(&res.inner.view)
                                         }
                                         BindingResource::Buffer(res) => {
                                             res.inner.as_entire_binding()

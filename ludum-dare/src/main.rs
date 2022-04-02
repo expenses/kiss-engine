@@ -2,6 +2,7 @@ use glam::Mat3;
 use glam::Mat4;
 use glam::Quat;
 use glam::Vec3;
+use glam::Vec2;
 use kiss_engine_wgpu::{
     BindingResource, Device, DeviceWithFormats, RenderPipelineDesc, Resource, VertexBufferLayout,
 };
@@ -87,14 +88,20 @@ fn main() {
 
     let mut device = Device::new(device);
 
-    let mut player_position = Vec3::new(0.0, 0.0, 0.0);
+    let mut player_position = Vec2::new(0.0, 0.0);
+    let mut player_speed: f32 = 0.0;
+    let mut player_facing = 0.0;
+
+    fn map_to_3d(position: Vec2) -> Vec3 {
+        Vec3::new(position.x, 0.0, position.y)
+    }
 
     let mut orbit = Orbit::from_vector(Vec3::new(0.0, 1.5, -3.5) * 2.5);
 
     let view_matrix = {
         Mat4::look_at_rh(
-            player_position + orbit.as_vector(),
-            player_position,
+            map_to_3d(player_position) + orbit.as_vector(),
+            map_to_3d(player_position),
             Vec3::Y,
         )
     };
@@ -105,13 +112,157 @@ fn main() {
             contents: bytemuck::bytes_of(&Uniforms {
                 matrices: perspective_matrix * view_matrix,
                 player_position,
-                _padding: 0.0,
+                player_facing,
+                _padding: 0,
+
             }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         },
     ));
 
     let mut kbd = KeyboardState::default();
+
+    let height_map = device.get_texture(&wgpu::TextureDescriptor {
+        size: wgpu::Extent3d {
+            width: 1024,
+            height: 1024,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::R32Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+        label: Some("height map"),
+    });
+
+
+    let buffer_size = 1024 * 1024 * 4;
+
+    let target_buffer = device.inner.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: buffer_size,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+
+    {
+        let mut encoder =
+                device
+                    .inner
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("init encoder"),
+                    });
+
+                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("init render pass"),
+                        color_attachments: &[wgpu::RenderPassColorAttachment {
+                            view: &height_map.view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color {
+                                    r: 0.0,
+                                    g: 0.0,
+                                    b: 0.0,
+                                    a: 0.0,
+                                }),
+                                store: true,
+                            },
+                        }],
+                        depth_stencil_attachment: None,
+                    });
+
+                    let device =
+                    device.with_formats(wgpu::TextureFormat::R32Float, None);
+
+                    let pipeline = device.get_pipeline(
+                        "bake pipeline",
+                        device.device.get_shader("shaders/compiled/bake_height_map.vert.spv"),
+                        device.device.get_shader("shaders/compiled/bake_height_map.frag.spv"),
+                        RenderPipelineDesc {
+                            primitive: wgpu::PrimitiveState::default(),
+                            ..Default::default()
+                        },
+                        &[
+                            VertexBufferLayout {
+                                location: 0,
+                                format: wgpu::VertexFormat::Float32x3,
+                                step_mode: wgpu::VertexStepMode::Vertex,
+                            },
+                            VertexBufferLayout {
+                                location: 1,
+                                format: wgpu::VertexFormat::Float32x2,
+                                step_mode: wgpu::VertexStepMode::Vertex,
+                            },
+                        ],
+                    );
+
+                    let bind_group = device.get_bind_group(
+                        "bake height map bind group",
+                        pipeline,
+                        &[],
+                    );
+
+                    render_pass.set_pipeline(&pipeline.pipeline);
+                    render_pass.set_bind_group(0, bind_group, &[]);
+
+                    render_pass.set_vertex_buffer(0, plane.positions.slice(..));
+                    render_pass.set_vertex_buffer(1, plane.uvs.slice(..));
+                    render_pass.set_index_buffer(plane.indices.slice(..), wgpu::IndexFormat::Uint32);
+
+                    render_pass.draw_indexed(0..plane.num_indices, 0, 0..1);
+
+
+                    drop(render_pass);
+
+                    encoder.copy_texture_to_buffer(wgpu::ImageCopyTexture {
+                        texture: &height_map.texture,
+                        mip_level: 0,
+                        origin: Default::default(),
+                        aspect: Default::default()
+                    }, wgpu::ImageCopyBuffer {
+                        buffer: &target_buffer,
+                        layout: wgpu::ImageDataLayout {
+                            bytes_per_row: Some(std::num::NonZeroU32::new(1024 * 4).unwrap()),
+                            ..Default::default()
+                        },
+                    }, wgpu::Extent3d {
+                        width: 1024,
+                        height: 1024,
+                        depth_or_array_layers: 1,
+                    });
+
+
+
+            queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    let slice = target_buffer.slice(..);
+
+    let map_future = slice.map_async(wgpu::MapMode::Read);
+
+    device.inner.poll(wgpu::Maintain::Wait);
+
+    pollster::block_on(map_future).unwrap();
+
+    let bytes = slice.get_mapped_range();
+
+    dbg!(bytes.len());
+
+    std::fs::write("heightmap", bytes).unwrap();
+
+    drop(height_map);
+
+    let sampler = device.create_resource(
+        device
+            .inner
+            .create_sampler(&wgpu::SamplerDescriptor {
+                address_mode_u: wgpu::AddressMode::Repeat,
+                address_mode_v: wgpu::AddressMode::Repeat,
+                ..Default::default()
+            }),
+    );
 
     event_loop.run(move |event, _, control_flow| match event {
         event::Event::WindowEvent {
@@ -160,6 +311,9 @@ fn main() {
                     VirtualKeyCode::D => kbd.right = pressed,
                     VirtualKeyCode::Up => kbd.forwards = pressed,
                     VirtualKeyCode::Down => kbd.backwards = pressed,
+                    VirtualKeyCode::C if pressed => {
+                        orbit.yaw = player_facing;
+                    }
                     _ => {}
                 }
             }
@@ -174,7 +328,7 @@ fn main() {
             let delta_time = 1.0 / 60.0;
 
             if (forwards, right) != (0, 0) {
-                let player_facing = current_facing
+                player_facing = current_facing
                     + match (forwards, right) {
                         (0, 1) => 90.0_f32.to_radians(),
                         (0, -1) => -90.0_f32.to_radians(),
@@ -189,16 +343,23 @@ fn main() {
                         _ => 0.0,
                     };
 
-                player_position +=
-                    Quat::from_rotation_y(player_facing) * Vec3::new(0.0, 0.0, -delta_time * 10.0);
-
                 orbit.yaw += short_angle_dist(orbit.yaw, player_facing) * 0.015;
+
+                player_speed = (player_speed + delta_time).min(1.0);
+            } else {
+                player_speed *= 0.9;
             }
+
+            let movement = Quat::from_rotation_y(player_facing)
+            * Vec3::new(0.0, 0.0, -delta_time * 10.0 * player_speed);
+
+            player_position.x += movement.x;
+            player_position.y += movement.z;
 
             let view_matrix = {
                 Mat4::look_at_rh(
-                    player_position + orbit.as_vector(),
-                    player_position,
+                    map_to_3d(player_position) + orbit.as_vector(),
+                    map_to_3d(player_position),
                     Vec3::Y,
                 )
             };
@@ -209,7 +370,8 @@ fn main() {
                 bytemuck::bytes_of(&Uniforms {
                     matrices: perspective_matrix * view_matrix,
                     player_position,
-                    _padding: 0.0,
+                    player_facing,
+                    _padding: 0,
                 }),
             );
 
@@ -266,7 +428,7 @@ fn main() {
                     },
                 }],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &depth_texture,
+                    view: &depth_texture.view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(0.0),
                         store: true,
@@ -281,8 +443,8 @@ fn main() {
 
                 let pipeline = device.get_pipeline(
                     "plane pipeline",
-                    device.device.get_shader("shaders/plane.vert.spv"),
-                    device.device.get_shader("shaders/plane.frag.spv"),
+                    device.device.get_shader("shaders/compiled/plane.vert.spv"),
+                    device.device.get_shader("shaders/compiled/plane.frag.spv"),
                     RenderPipelineDesc {
                         ..Default::default()
                     },
@@ -297,13 +459,21 @@ fn main() {
                             format: wgpu::VertexFormat::Float32x3,
                             step_mode: wgpu::VertexStepMode::Vertex,
                         },
+                        VertexBufferLayout {
+                            location: 2,
+                            format: wgpu::VertexFormat::Float32x2,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                        },
                     ],
                 );
+
+                let height_map = device.device.try_get_cached_texture("height map").unwrap();
+
 
                 let bind_group = device.get_bind_group(
                     "plane bind group",
                     pipeline,
-                    &[kiss_engine_wgpu::BindingResource::Buffer(&uniform_buffer)],
+                    &[BindingResource::Buffer(&uniform_buffer)],
                 );
 
                 render_pass.set_pipeline(&pipeline.pipeline);
@@ -311,14 +481,16 @@ fn main() {
 
                 render_pass.set_vertex_buffer(0, plane.positions.slice(..));
                 render_pass.set_vertex_buffer(1, plane.normals.slice(..));
+
+                render_pass.set_vertex_buffer(2, plane.uvs.slice(..));
                 render_pass.set_index_buffer(plane.indices.slice(..), wgpu::IndexFormat::Uint32);
 
                 render_pass.draw_indexed(0..plane.num_indices, 0, 0..1);
 
                 let pipeline = device.get_pipeline(
                     "capsule pipeline",
-                    device.device.get_shader("shaders/capsule.vert.spv"),
-                    device.device.get_shader("shaders/plane.frag.spv"),
+                    device.device.get_shader("shaders/compiled/capsule.vert.spv"),
+                    device.device.get_shader("shaders/compiled/plane.frag.spv"),
                     RenderPipelineDesc {
                         ..Default::default()
                     },
@@ -339,7 +511,7 @@ fn main() {
                 let bind_group = device.get_bind_group(
                     "capsule bind group",
                     pipeline,
-                    &[kiss_engine_wgpu::BindingResource::Buffer(&uniform_buffer)],
+                    &[BindingResource::Buffer(&uniform_buffer), BindingResource::Texture(&height_map), BindingResource::Sampler(&sampler)],
                 );
 
                 render_pass.set_pipeline(&pipeline.pipeline);
@@ -377,6 +549,7 @@ struct KeyboardState {
 struct Model {
     positions: wgpu::Buffer,
     normals: wgpu::Buffer,
+    uvs: wgpu::Buffer,
     indices: wgpu::Buffer,
     num_indices: u32,
 }
@@ -392,6 +565,7 @@ impl Model {
         let mut indices = Vec::new();
         let mut positions = Vec::new();
         let mut normals = Vec::new();
+        let mut uvs = Vec::new();
 
         for (node, mesh) in gltf
             .nodes()
@@ -424,6 +598,9 @@ impl Model {
                         .unwrap()
                         .map(|normal| transform.rotation * Vec3::from(normal)),
                 );
+
+                println!("{}", name);
+                uvs.extend(reader.read_tex_coords(0).unwrap().into_f32().map(|uv| Vec2::from(uv)));
             }
         }
 
@@ -441,6 +618,11 @@ impl Model {
             normals: (device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("{} normals buffer", name)),
                 contents: bytemuck::cast_slice(&normals),
+                usage: wgpu::BufferUsages::VERTEX,
+            })),
+            uvs: (device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(&format!("{} uvs buffer", name)),
+                contents: bytemuck::cast_slice(&uvs),
                 usage: wgpu::BufferUsages::VERTEX,
             })),
             num_indices: indices.len() as u32,
@@ -499,8 +681,9 @@ impl NodeTree {
 #[repr(C)]
 pub struct Uniforms {
     pub matrices: Mat4,
-    pub player_position: Vec3,
-    pub _padding: f32,
+    pub player_position: Vec2,
+    pub player_facing: f32,
+    _padding: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -563,7 +746,7 @@ impl Orbit {
         }
     }
 
-    pub fn rotate(&mut self, delta: glam::Vec2) {
+    pub fn rotate(&mut self, delta: Vec2) {
         use std::f32::consts::PI;
         let speed = 0.15;
         self.yaw -= delta.x.to_radians() * speed;
