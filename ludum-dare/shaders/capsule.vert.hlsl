@@ -17,7 +17,7 @@ struct Out {
 Out main(In input) {
     Out output;
 
-    output.position = (matrices * float4(input.pos, 1.0));
+    output.position = (matrices * float4(player_position + input.pos, 1.0));
     output.uv = float2(input.pos.x, input.pos.z);
     output.normal = input.normal;
 

@@ -87,13 +87,24 @@ fn main() {
 
     let mut device = Device::new(device);
 
-    let mut camera: dolly::rig::CameraRig = dolly::rig::CameraRig::builder()
-        .with(dolly::drivers::Position::new(glam::Vec3::new(
-            0.0, 0.0, 0.0,
-        )))
-        .with(dolly::drivers::YawPitch::new().pitch_degrees(-15.0))
-        .with(dolly::drivers::Arm::new(glam::Vec3::Z * 10.0))
-        .build();
+    let mut player_position = Vec3::new(0.0, 0.0, 0.0);
+    let mut player_facing = 0.0;
+
+    use dolly::prelude::*;
+
+    let mut camera: dolly::rig::CameraRig = CameraRig::builder()
+    .with(Position::new(player_position))
+    .with(YawPitch {yaw_degrees:0.0, pitch_degrees:-45.0 })
+    //.with(Smooth::new_position_rotation(1.25 * 20.0, 1.25 * 20.0).predictive(true))
+    .with(Arm::new(Vec3::Z * 10.0))
+    //.with(Smooth::new_position(2.5))
+    //.with(Smooth::new_position(2.5))
+    /*.with(
+        LookAt::new(player_position + Vec3::Y)
+            .tracking_smoothness(1.25)
+            .tracking_predictive(true),
+    )*/
+    .build();
 
     let view_matrix = glam::Mat4::look_at_rh(
         camera.final_transform.position,
@@ -104,7 +115,7 @@ fn main() {
     let uniform_buffer = device.create_resource(device.inner.create_buffer_init(
         &wgpu::util::BufferInitDescriptor {
             label: Some("uniform buffer"),
-            contents: bytemuck::bytes_of(&{ perspective_matrix * view_matrix }),
+            contents: bytemuck::bytes_of(&Uniforms { matrices: perspective_matrix * view_matrix, player_position, _padding: 0.0, }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         },
     ));
@@ -156,23 +167,71 @@ fn main() {
                     VirtualKeyCode::A => kbd.left = pressed,
                     VirtualKeyCode::S => kbd.down = pressed,
                     VirtualKeyCode::D => kbd.right = pressed,
+                    VirtualKeyCode::Up => kbd.forwards = pressed,
+                    VirtualKeyCode::Down => kbd.backwards = pressed,
                     _ => {}
                 }
             }
             _ => {}
         },
         event::Event::MainEventsCleared => {
-            let yaw = kbd.right as i32 as f32 - kbd.left as i32 as f32;
-            let pitch = kbd.down as i32 as f32 - kbd.up as i32 as f32;
+            let current_facing = {
+                let facing = camera.driver_mut::<YawPitch>().yaw_degrees.to_radians();
 
-            camera
-                .driver_mut::<dolly::drivers::YawPitch>()
-                .rotate_yaw_pitch(yaw * 2.0, pitch * 2.0);
+                facing
+            };
 
-            camera.driver_mut::<dolly::drivers::Position>().position =
-                glam::Vec3::new(0.0, 0.0, 0.0);
+            let forwards = kbd.up as i32 - kbd.down as i32;
+            let right = kbd.right as i32 - kbd.left as i32;
+
+            if (forwards, right) != (0, 0) {
+                player_facing = current_facing + match (forwards, right) {
+                    (0, 1) => 90.0_f32.to_radians(),
+                    (0, -1) =>  - 90.0_f32.to_radians(),
+                    (1, 1) =>  45.0_f32.to_radians(),
+                    (1, -1) =>  - 45.0_f32.to_radians(),
+
+                    (-1, -1) =>  - 135.0_f32.to_radians(),
+                    (-1, 1) =>  135.0_f32.to_radians(),
+
+                    (-1, 0) => 180.0_f32.to_radians(),
+
+                    _ => 0.0
+                };
+            }
+
+            let mut movement = -glam::Vec2::new(forwards.abs() as f32, right.abs() as f32);
+
+            if movement != glam::Vec2::ZERO {
+                movement = movement.normalize();
+            }
 
             let delta_time = 1.0 / 60.0;
+
+            player_position.z += movement.x * player_facing.cos() * delta_time * 5.0;
+
+            player_position.x -= movement.y * player_facing.sin() * delta_time * 5.0;
+
+            //player_position.z += movement.y * player_facing.sin() * delta_time * 5.0;
+
+            camera.driver_mut::<Position>().position = player_position;
+
+            let yaw_pitch = camera.driver_mut::<YawPitch>();
+
+            if yaw_pitch.yaw_degrees != player_facing.to_degrees() {
+                let diff = yaw_degrees - player_facing.to_degrees();
+
+                let x = 1.0_f32.min(diff);
+
+                yaw_pitch.yaw_degrees 
+
+                camera.driver_mut::<YawPitch>().rotate_yaw_pitch(x * 0.1, 0.0);
+            }
+            /*if movement != glam::Vec2::ZERO {
+                camera.driver_mut::<Rotation>().rotation = Quat::from_rotation_y((push.y).atan2(-push.x));
+            }
+            camera.driver_mut::<LookAt>().target = player_position + Vec3::Y;*/
+
 
             camera.update(delta_time);
 
@@ -185,7 +244,7 @@ fn main() {
             queue.write_buffer(
                 &uniform_buffer,
                 0,
-                bytemuck::bytes_of(&{ perspective_matrix * view_matrix }),
+                bytemuck::bytes_of(&Uniforms { matrices: perspective_matrix * view_matrix, player_position, _padding: 0.0 }),
             );
 
             window.request_redraw();
@@ -284,17 +343,48 @@ fn main() {
                 render_pass.set_pipeline(&pipeline.pipeline);
                 render_pass.set_bind_group(0, bind_group, &[]);
 
+                render_pass.set_vertex_buffer(0, plane.positions.slice(..));
+                render_pass.set_vertex_buffer(1, plane.normals.slice(..));
+                render_pass.set_index_buffer(plane.indices.slice(..), wgpu::IndexFormat::Uint32);
+
+                render_pass.draw_indexed(0..plane.num_indices, 0, 0..1);
+
+                let pipeline = device.get_pipeline(
+                    "capsule pipeline",
+                    device.device.get_shader("shaders/capsule.vert.spv"),
+                    device.device.get_shader("shaders/plane.frag.spv"),
+                    RenderPipelineDesc {
+                        ..Default::default()
+                    },
+                    &[
+                        VertexBufferLayout {
+                            location: 0,
+                            format: wgpu::VertexFormat::Float32x3,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                        },
+                        VertexBufferLayout {
+                            location: 1,
+                            format: wgpu::VertexFormat::Float32x3,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                        },
+                    ],
+                );
+
+                let bind_group = device.get_bind_group(
+                    "capsule bind group",
+                    pipeline,
+                    &[kiss_engine_wgpu::BindingResource::Buffer(&uniform_buffer)],
+                );
+
+                render_pass.set_pipeline(&pipeline.pipeline);
+                render_pass.set_bind_group(0, bind_group, &[]);
+
                 render_pass.set_vertex_buffer(0, capsule.positions.slice(..));
                 render_pass.set_vertex_buffer(1, capsule.normals.slice(..));
                 render_pass.set_index_buffer(capsule.indices.slice(..), wgpu::IndexFormat::Uint32);
 
                 render_pass.draw_indexed(0..capsule.num_indices, 0, 0..1);
 
-                render_pass.set_vertex_buffer(0, plane.positions.slice(..));
-                render_pass.set_vertex_buffer(1, plane.normals.slice(..));
-                render_pass.set_index_buffer(plane.indices.slice(..), wgpu::IndexFormat::Uint32);
-
-                render_pass.draw_indexed(0..plane.num_indices, 0, 0..1);
             }
 
             drop(render_pass);
@@ -315,6 +405,8 @@ struct KeyboardState {
     right: bool,
     up: bool,
     down: bool,
+    forwards: bool,
+    backwards: bool,
 }
 
 struct Model {
@@ -365,7 +457,7 @@ impl Model {
 
                 normals.extend(
                     reader
-                        .read_positions()
+                        .read_normals()
                         .unwrap()
                         .map(|normal| transform.rotation * Vec3::from(normal)),
                 );
@@ -438,6 +530,15 @@ impl NodeTree {
 
         transform_sum
     }
+}
+
+
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct Uniforms {
+    pub matrices: Mat4,
+    pub player_position: Vec3,
+    pub _padding: f32,
 }
 
 #[derive(Clone, Copy)]

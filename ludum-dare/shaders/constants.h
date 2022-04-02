@@ -1,0 +1,1 @@
+#define SUN_DIR normalize(float3(0.0, 10.0, 1.0))
