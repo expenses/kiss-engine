@@ -71,7 +71,7 @@ fn main() {
     .expect("Unable to find a suitable GPU adapter!");
 
     let plane = Model::new(include_bytes!("../plane.glb"), &device, "plane").unwrap();
-    let capsule = Model::new(include_bytes!("../capsule.glb"), &device, "capsule").unwrap();
+    let capsule = Model::new(include_bytes!("../fire_giant.glb"), &device, "capsule").unwrap();
     let bounce_sphere = Model::new(
         include_bytes!("../bounce_sphere.glb"),
         &device,
@@ -94,6 +94,16 @@ fn main() {
         present_mode: wgpu::PresentMode::Fifo,
     };
     surface.configure(&device, &config);
+
+    // Prepare glyph_brush
+    let font = wgpu_glyph::ab_glyph::FontArc::try_from_slice(include_bytes!(
+        "../VonwaonBitmap-16pxLite.ttf"
+    )).unwrap();
+
+    let mut glyph_brush = wgpu_glyph::GlyphBrushBuilder::using_font(font)
+        .build(&device, dbg!(config.format));
+
+        let mut staging_belt = wgpu::util::StagingBelt::new(1024);
 
     let mut device = Device::new(device);
 
@@ -404,6 +414,13 @@ fn main() {
         "forest map texture",
     );
 
+    let giant_tex = load_image(
+        &device,
+        &queue,
+        include_bytes!("../fire_giant.png"),
+        "fire giant texture",
+    );
+
     let sampler = device.create_resource(device.inner.create_sampler(&wgpu::SamplerDescriptor {
         address_mode_u: wgpu::AddressMode::Repeat,
         address_mode_v: wgpu::AddressMode::Repeat,
@@ -419,6 +436,9 @@ fn main() {
             mipmap_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         }));
+
+    let mut bounces = 0;
+    let mut lost = false;
 
     event_loop.run(move |event, _, control_flow| match event {
         event::Event::WindowEvent {
@@ -461,16 +481,14 @@ fn main() {
                 let pressed = state == event::ElementState::Pressed;
 
                 match key {
-                    VirtualKeyCode::W => kbd.up = pressed,
-                    VirtualKeyCode::A => kbd.left = pressed,
-                    VirtualKeyCode::S => kbd.down = pressed,
-                    VirtualKeyCode::D => kbd.right = pressed,
-                    VirtualKeyCode::Up => kbd.forwards = pressed,
-                    VirtualKeyCode::Down => kbd.backwards = pressed,
+                    VirtualKeyCode::W | VirtualKeyCode::Up => kbd.up = pressed,
+                    VirtualKeyCode::A | VirtualKeyCode::Left => kbd.left = pressed,
+                    VirtualKeyCode::S | VirtualKeyCode::Down => kbd.down = pressed,
+                    VirtualKeyCode::D | VirtualKeyCode::Right => kbd.right = pressed,
                     VirtualKeyCode::C if pressed => {
                         orbit.yaw = player_facing;
                     }
-                    VirtualKeyCode::B if pressed => {
+                    VirtualKeyCode::Space if pressed => {
                         let player_position = Vec3::new(
                             player_position.x,
                             heightmap.sample(player_position / 80.0 + 0.5),
@@ -569,7 +587,8 @@ fn main() {
                 && meteor_props.position.distance(bounce_sphere_props.position)
                     < (bounce_sphere_props.scale + 2.0)
             {
-                println!("Bounced!");
+                bounces += 1;
+
                 meteor_props.velocity.y = meteor_props.velocity.y.abs();
 
                 let rotation = rng.gen_range(0.0..=std::f32::consts::TAU);
@@ -577,8 +596,8 @@ fn main() {
 
                 meteor_props.velocity.x = velocity * rotation.cos();
                 meteor_props.velocity.z = velocity * rotation.sin();
-            } else if meteor_props.position.y < height {
-                println!("You Suck");
+            } else if meteor_props.position.y < -10.0 {
+                lost = true;
             }
 
             queue.write_buffer(
@@ -726,13 +745,13 @@ fn main() {
                 render_pass.draw_indexed(0..plane.num_indices, 0, 0..1);
 
                 let pipeline = device.get_pipeline(
-                    "capsule pipeline",
+                    "player pipeline",
                     device
                         .device
                         .get_shader("shaders/compiled/capsule.vert.spv"),
                     device
                         .device
-                        .get_shader("shaders/compiled/capsule.frag.spv"),
+                        .get_shader("shaders/compiled/tree.frag.spv"),
                     RenderPipelineDesc {
                         ..Default::default()
                     },
@@ -747,6 +766,11 @@ fn main() {
                             format: wgpu::VertexFormat::Float32x3,
                             step_mode: wgpu::VertexStepMode::Vertex,
                         },
+                        VertexBufferLayout {
+                            location: 2,
+                            format: wgpu::VertexFormat::Float32x2,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                        },
                     ],
                 );
 
@@ -756,6 +780,8 @@ fn main() {
                     &[
                         BindingResource::Buffer(&uniform_buffer),
                         BindingResource::Buffer(&meteor_buffer),
+                        BindingResource::Sampler(&sampler),
+                        BindingResource::Texture(&giant_tex),
                     ],
                 );
 
@@ -764,6 +790,7 @@ fn main() {
 
                 render_pass.set_vertex_buffer(0, capsule.positions.slice(..));
                 render_pass.set_vertex_buffer(1, capsule.normals.slice(..));
+                render_pass.set_vertex_buffer(2, capsule.uvs.slice(..));
                 render_pass.set_index_buffer(capsule.indices.slice(..), wgpu::IndexFormat::Uint32);
 
                 render_pass.draw_indexed(0..capsule.num_indices, 0, 0..1);
@@ -1014,6 +1041,48 @@ fn main() {
 
             drop(render_pass);
 
+
+            {
+                glyph_brush.queue(wgpu_glyph::Section {
+                    screen_position: (16.0, 0.0),
+                    bounds: (config.width as f32, config.height as f32),
+                    text: vec![wgpu_glyph::Text::new(&format!("Bounces: {}", bounces))
+                        .with_color([0.0, 0.0, 0.0, 1.0])
+                        .with_scale(64.0)],
+                    ..wgpu_glyph::Section::default()
+                });
+
+                if lost {
+                    glyph_brush.queue(wgpu_glyph::Section {
+                        screen_position: (config.width as f32 / 2.0, config.height as f32 / 2.0),
+                        bounds: (config.width as f32, config.height as f32),
+                        text: vec![wgpu_glyph::Text::new("Death\n死")
+                            .with_color([0.75, 0.0, 0.0, 1.0])
+                            .with_scale(196.0)],
+                        layout: wgpu_glyph::Layout::Wrap {
+                            line_breaker: Default::default(),
+                            h_align: wgpu_glyph::HorizontalAlign::Center,
+                            v_align: wgpu_glyph::VerticalAlign::Center,
+                        },
+                        ..wgpu_glyph::Section::default()
+                    });
+                }
+
+                // Draw the text!
+                glyph_brush
+                    .draw_queued(
+                        &device.inner,
+                        &mut staging_belt,
+                        &mut encoder,
+                        &view,
+                        config.width,
+                        config.height,
+                    )
+                    .expect("Draw queued");
+
+                    staging_belt.finish();
+            }
+
             queue.submit(std::iter::once(encoder.finish()));
 
             frame.present();
@@ -1030,8 +1099,6 @@ struct KeyboardState {
     right: bool,
     up: bool,
     down: bool,
-    forwards: bool,
-    backwards: bool,
 }
 
 struct Model {

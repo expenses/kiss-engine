@@ -1,4 +1,4 @@
-#include "constants.h"
+#include "common.h"
 
 
 [[vk::binding(1)]] Texture2D<float4> depth_map_tex;

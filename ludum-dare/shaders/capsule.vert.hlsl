@@ -7,12 +7,13 @@
 struct In {
     [[vk::location(0)]] float3 pos: TEXCOORD0;
     [[vk::location(1)]] float3 normal: TEXCOORD1;
+    [[vk::location(2)]] float2 uv: TEXCOORD1;
 };
 
 struct Out {
     float4 position: SV_Position;
-    [[vk::location(0)]] float2 uv: TEXCOORD0;
-    [[vk::location(1)]] float3 normal: TEXCOORD1;
+    [[vk::location(0)]] float3 normal: TEXCOORD1;
+    [[vk::location(1)]] float2 uv: TEXCOORD0;
     [[vk::location(2)]] float3 position2: TEXCOORD1;
 };
 
@@ -31,15 +32,14 @@ row_major float3x3 rotation_matrix_y(float theta) {
 Out main(In input) {
     Out output;
 
-    float3 p = player_position;
-
     float3x3 rot = rotation_matrix_y(-player_facing);
 
+    float3 final_position = player_position + (rot * input.pos);
 
-    output.position = (matrices) * float4(p + (rot * input.pos), 1.0);
-    output.uv = float2(input.pos.x, input.pos.z);
+    output.position = (matrices) * float4(final_position, 1.0);
+    output.uv = input.uv;
     output.normal = rot * input.normal;
-    output.position2 = p + (rot * input.pos);
+    output.position2 = final_position;
 
     return output;
 }

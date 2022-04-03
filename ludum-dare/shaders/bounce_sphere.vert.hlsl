@@ -24,8 +24,7 @@ Out main(In input) {
 
     float3 final_position = position + (scale * input.pos);
 
-
-    output.position = (matrices) * float4(final_position, 1.0);
+    output.position = matrices * float4(final_position, 1.0);
     output.normal = input.normal;
 
     return output;

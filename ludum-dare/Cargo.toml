@@ -7,7 +7,6 @@ edition = "2021"
 
 [dependencies]
 pollster = "0.2.5"
-wgpu = { git = "https://github.com/gfx-rs/wgpu" }
 winit = "0.26.1"
 kiss-engine-wgpu = { path = "../kiss-engine-wgpu" }
 log = "0.4.16"
@@ -18,3 +17,5 @@ glam = { version = "0.20.3", features = ["bytemuck"] }
 anyhow = "1.0.56"
 rand = "0.8.5"
 image = { version = "0.24.1", default-features = false, features = ["png"] }
+wgpu_glyph = "0.16.0"
+wgpu = "0.12.0"

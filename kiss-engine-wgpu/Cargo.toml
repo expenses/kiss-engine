@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-wgpu = { git = "https://github.com/gfx-rs/wgpu", features = ["spirv"] }
+wgpu = { version = "0.12.0", features = ["spirv"] }
 parking_lot = "0.12.0"
 rspirv-reflect = "0.6.0"
 elsa = "1.7.0"

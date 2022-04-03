@@ -1,5 +1,5 @@
 
-#include "constants.h"
+#include "common.h"
 
 struct In {
     [[vk::location(0)]] float3 normal: TEXCOORD0;
@@ -19,22 +19,10 @@ struct Out {
 [[vk::binding(2)]] sampler tex_sampler;
 [[vk::binding(3)]] Texture2D<float3> forest_tex;
 
-
-float shadow_factor(float3 position, float3 meteor_position) {
-    float2 pos_2d = float2(position.x, position.z);
-    float2 meteor_pos_2d = float2(meteor_position.x, meteor_position.z);
-
-    float shadow_scale = (150.0 + position.y - meteor_position.y) * 0.01;
-
-    float ambient = 0.025;
-
-    return max(smoothstep(shadow_scale * 0.9, shadow_scale * 1.1, distance(pos_2d, meteor_pos_2d)), ambient);
-}
-
 Out main(In input) {
     Out output;
 
-    float diffuse = max(dot(normalize(input.normal), SUN_DIR), 0.0);
+    float diffuse = max(dot(normalize(input.normal), SUN_DIR), 0.1);
 
     output.color = float4(forest_tex.Sample(tex_sampler, input.uv) * diffuse, 1.0);
 
