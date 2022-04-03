@@ -1271,10 +1271,16 @@ async fn run() {
                 });
 
                 if state.lost {
+                    let text = if state.bounces >= 69 {
+                        "Special Win\n特别胜利"
+                    } else {
+                        "Death\n死"
+                    };
+
                     glyph_brush.queue(wgpu_glyph::Section {
                         screen_position: (config.width as f32 / 2.0, config.height as f32 / 2.0),
                         bounds: (config.width as f32, config.height as f32),
-                        text: vec![wgpu_glyph::Text::new("Death\n死")
+                        text: vec![wgpu_glyph::Text::new(text)
                             .with_color([0.75, 0.0, 0.0, 1.0])
                             .with_scale(96.0 * window.scale_factor() as f32)],
                         layout: wgpu_glyph::Layout::Wrap {
