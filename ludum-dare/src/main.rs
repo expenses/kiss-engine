@@ -158,6 +158,9 @@ async fn run() {
 
     let (meteor, _) = Model::new(include_bytes!("../meteor.glb"), &device, "meteor");
 
+    let (skydome, _) = Model::new(include_bytes!("../skydome.glb"), &device, "skydome");
+
+
     let mut perspective_matrix = perspective_matrix_reversed(size.width, size.height);
 
     let size = window.inner_size();
@@ -523,6 +526,13 @@ async fn run() {
         &queue,
         include_bytes!("../ripple.png"),
         "ripple texture",
+    );
+
+    let skydome_tex = load_image(
+        &device,
+        &queue,
+        include_bytes!("../skydome.png"),
+        "skydome texture",
     );
 
     let sampler = device.create_resource(device.inner.create_sampler(&wgpu::SamplerDescriptor {
@@ -980,6 +990,43 @@ async fn run() {
 
                     render_pass.set_vertex_buffer(3, house_points.slice(..));
                     house.render(&mut render_pass, num_house_points);
+                }
+
+                {
+                    let pipeline = device.get_pipeline(
+                        "skydome pipeline",
+                        device.device.get_shader(
+                            "shaders/compiled/skydome.vert.spv",
+                            #[cfg(feature = "standalone")]
+                            include_bytes!("../shaders/compiled/skydome.vert.spv"),
+                            Default::default(),
+                        ),
+                        device.device.get_shader(
+                            "shaders/compiled/skydome.frag.spv",
+                            #[cfg(feature = "standalone")]
+                            include_bytes!("../shaders/compiled/skydome.frag.spv"),
+                            Default::default(),
+                        ),
+                        RenderPipelineDesc {
+                            ..Default::default()
+                        },
+                        INSTANCED_FORMAT,
+                    );
+
+                    let bind_group = device.get_bind_group(
+                        "skydome",
+                        pipeline,
+                        &[
+                            BindingResource::Buffer(&uniform_buffer),
+                            BindingResource::Sampler(&sampler),
+                            BindingResource::Texture(&skydome_tex),
+                        ],
+                    );
+
+                    render_pass.set_pipeline(&pipeline.pipeline);
+                    render_pass.set_bind_group(0, bind_group, &[]);
+
+                    skydome.render(&mut render_pass, 1);
                 }
             }
 
