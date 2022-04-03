@@ -187,21 +187,16 @@ async fn run() {
 
     let mut device = Device::new(device);
 
-    let mut player_position = Vec2::new(0.0, 0.0);
-    let mut player_speed: f32 = 0.0;
-    let mut player_facing = 0.0;
-    let mut time = 0.0;
-
-    let mut orbit = Orbit::from_vector(Vec3::new(0.0, 1.5, -3.5) * 2.5);
+    let mut state = State::default();
 
     let player_height_offset = Vec3::new(0.0, 1.5, 0.0);
 
     let view_matrix = {
         Mat4::look_at_rh(
-            Vec3::new(player_position.x, 0.0, player_position.y)
+            Vec3::new(state.player_position.x, 0.0, state.player_position.y)
                 + player_height_offset
-                + orbit.as_vector(),
-            Vec3::new(player_position.x, 1.0, player_position.y) + player_height_offset,
+                + state.orbit.as_vector(),
+            Vec3::new(state.player_position.x, 1.0, state.player_position.y) + player_height_offset,
             Vec3::Y,
         )
     };
@@ -211,12 +206,12 @@ async fn run() {
             label: Some("uniform buffer"),
             contents: bytemuck::bytes_of(&Uniforms {
                 matrices: perspective_matrix * view_matrix,
-                player_position: Vec3::new(player_position.x, 0.0, player_position.y),
-                player_facing,
-                camera_position: Vec3::new(player_position.x, 0.0, player_position.y)
+                player_position: Vec3::new(state.player_position.x, 0.0, state.player_position.y),
+                player_facing: state.player_facing,
+                camera_position: Vec3::new(state.player_position.x, 0.0, state.player_position.y)
                     + player_height_offset
-                    + orbit.as_vector(),
-                time,
+                    + state.orbit.as_vector(),
+                time: state.time,
                 window_size: Vec2::new(config.width as f32, config.height as f32),
                 ..Default::default()
             }),
@@ -224,21 +219,11 @@ async fn run() {
         },
     ));
 
-    let mut bounce_sphere_props = BounceSphereProps {
-        position: Vec3::ZERO,
-        scale: 0.0,
-    };
-
-    let mut meteor_props = MeteorProps {
-        position: Vec3::Y * 100.0,
-        velocity: Vec3::ZERO,
-    };
-
     let meteor_buffer = device.create_resource(device.inner.create_buffer_init(
         &wgpu::util::BufferInitDescriptor {
             label: Some("meteor buffer"),
             contents: bytemuck::bytes_of(&MeteorGpuProps {
-                position: meteor_props.position,
+                position: state.meteor_props.position,
                 _padding: 0,
             }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -248,12 +233,10 @@ async fn run() {
     let bounce_sphere_buffer = device.create_resource(device.inner.create_buffer_init(
         &wgpu::util::BufferInitDescriptor {
             label: Some("bounce sphere buffer buffer"),
-            contents: bytemuck::bytes_of(&bounce_sphere_props),
+            contents: bytemuck::bytes_of(&state.bounce_sphere_props),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         },
     ));
-
-    let mut kbd = KeyboardState::default();
 
     let height_map = device.get_texture(&wgpu::TextureDescriptor {
         size: wgpu::Extent3d {
@@ -543,11 +526,6 @@ async fn run() {
             ..Default::default()
         }));
 
-    let mut bounces = 0;
-    let mut lost = false;
-    let mut animation_time = 0.0;
-    let mut animation_id = 0;
-
     let joint_transforms_buffer =
         device.create_resource(device.inner.create_buffer(&wgpu::BufferDescriptor {
             label: Some("player joint transforms"),
@@ -590,47 +568,50 @@ async fn run() {
                 input:
                     event::KeyboardInput {
                         virtual_keycode: Some(key),
-                        state,
+                        state: key_state,
                         ..
                     },
                 ..
             } => {
-                let pressed = state == event::ElementState::Pressed;
+                let pressed = key_state == event::ElementState::Pressed;
 
                 match key {
-                    VirtualKeyCode::W | VirtualKeyCode::Up => kbd.up = pressed,
-                    VirtualKeyCode::A | VirtualKeyCode::Left => kbd.left = pressed,
-                    VirtualKeyCode::S | VirtualKeyCode::Down => kbd.down = pressed,
-                    VirtualKeyCode::D | VirtualKeyCode::Right => kbd.right = pressed,
+                    VirtualKeyCode::W | VirtualKeyCode::Up => state.kbd.up = pressed,
+                    VirtualKeyCode::A | VirtualKeyCode::Left => state.kbd.left = pressed,
+                    VirtualKeyCode::S | VirtualKeyCode::Down => state.kbd.down = pressed,
+                    VirtualKeyCode::D | VirtualKeyCode::Right => state.kbd.right = pressed,
                     VirtualKeyCode::C if pressed => {
-                        orbit.yaw = player_facing;
+                        state.orbit.yaw = state.player_facing;
                     }
-                    VirtualKeyCode::Space if pressed && animation_id != 1 => {
-                        animation_id = 1;
-                        animation_time = 0.0;
+                    VirtualKeyCode::Space if pressed && state.animation_id != 1 => {
+                        state.animation_id = 1;
+                        state.animation_time = 0.0;
+                    }
+                    VirtualKeyCode::R if pressed && state.lost => {
+                        state = State::default();
                     }
                     _ => {}
                 }
             }
             WindowEvent::Focused(false) => {
-                kbd = Default::default();
+                state.kbd = Default::default();
             }
             _ => {}
         },
         event::Event::MainEventsCleared => {
-            let current_facing = { orbit.yaw };
+            let current_facing = { state.orbit.yaw };
 
-            let forwards = kbd.up as i32 - kbd.down as i32;
-            let right = -(kbd.right as i32 - kbd.left as i32);
+            let forwards = state.kbd.up as i32 - state.kbd.down as i32;
+            let right = -(state.kbd.right as i32 - state.kbd.left as i32);
 
             let delta_time = 1.0 / 60.0;
 
-            time += delta_time;
+            state.time += delta_time;
 
             if (forwards, right) != (0, 0) {
-                if animation_id == 0 {
-                    animation_id = 2;
-                    animation_time = 0.0;
+                if state.animation_id == 0 {
+                    state.animation_id = 2;
+                    state.animation_time = 0.0;
                 }
 
                 let new_player_facing = current_facing
@@ -648,103 +629,111 @@ async fn run() {
                         _ => 0.0,
                     };
 
-                player_facing += short_angle_dist(player_facing, new_player_facing) * 0.5;
+                state.player_facing +=
+                    short_angle_dist(state.player_facing, new_player_facing) * 0.5;
 
-                orbit.yaw += short_angle_dist(orbit.yaw, player_facing) * 0.015;
+                state.orbit.yaw += short_angle_dist(state.orbit.yaw, state.player_facing) * 0.015;
 
-                player_speed = (player_speed + delta_time).min(1.0);
+                state.player_speed = (state.player_speed + delta_time).min(1.0);
             } else {
-                player_speed *= 0.9;
+                state.player_speed *= 0.9;
 
-                if animation_id == 2 {
-                    animation_id = 0;
-                    animation_time = 0.0;
+                if state.animation_id == 2 {
+                    state.animation_id = 0;
+                    state.animation_time = 0.0;
                 }
             }
 
-            let movement = Quat::from_rotation_y(player_facing)
-                * Vec3::new(0.0, 0.0, -delta_time * 10.0 * player_speed);
+            let movement = Quat::from_rotation_y(state.player_facing)
+                * Vec3::new(0.0, 0.0, -delta_time * 10.0 * state.player_speed);
 
-            player_position.x += movement.x;
-            player_position.y += movement.z;
+            state.player_position.x += movement.x;
+            state.player_position.y += movement.z;
 
-            player_position.x = player_position.x.max(-40.0).min(40.0);
-            player_position.y = player_position.y.max(-40.0).min(40.0);
+            state.player_position.x = state.player_position.x.max(-40.0).min(40.0);
+            state.player_position.y = state.player_position.y.max(-40.0).min(40.0);
 
             let player_position_3d = Vec3::new(
-                player_position.x,
-                heightmap.sample(player_position / 80.0 + 0.5),
-                player_position.y,
+                state.player_position.x,
+                heightmap.sample(state.player_position / 80.0 + 0.5),
+                state.player_position.y,
             );
 
-            bounce_sphere_props.scale += bounce_sphere_props.scale * delta_time * 0.5;
+            state.bounce_sphere_props.scale += state.bounce_sphere_props.scale * delta_time * 0.5;
 
-            if bounce_sphere_props.scale > 1.5 {
-                bounce_sphere_props.scale = 0.0;
+            if state.bounce_sphere_props.scale > 1.5 {
+                state.bounce_sphere_props.scale = 0.0;
             }
 
-            meteor_props.velocity.y -= delta_time * 5.0;
+            state.meteor_props.velocity.y -= delta_time * 5.0;
 
-            if (meteor_props.position.x + meteor_props.velocity.x * delta_time).abs() > 40.0 {
-                meteor_props.velocity.x *= -1.0;
+            if (state.meteor_props.position.x + state.meteor_props.velocity.x * delta_time).abs()
+                > 40.0
+            {
+                state.meteor_props.velocity.x *= -1.0;
             }
 
-            if (meteor_props.position.z + meteor_props.velocity.z * delta_time).abs() > 40.0 {
-                meteor_props.velocity.z *= -1.0;
+            if (state.meteor_props.position.z + state.meteor_props.velocity.z * delta_time).abs()
+                > 40.0
+            {
+                state.meteor_props.velocity.z *= -1.0;
             }
 
-            meteor_props.position += meteor_props.velocity * delta_time;
+            state.meteor_props.position += state.meteor_props.velocity * delta_time;
 
-            if bounce_sphere_props.scale > 0.0
-                && meteor_props.position.distance(bounce_sphere_props.position)
-                    < (bounce_sphere_props.scale + 1.0)
+            if state.bounce_sphere_props.scale > 0.0
+                && state
+                    .meteor_props
+                    .position
+                    .distance(state.bounce_sphere_props.position)
+                    < (state.bounce_sphere_props.scale + 1.0)
             {
                 // This code can run move than once per bounce so we just do this hack lol
-                if meteor_props.velocity.y <= 0.0 {
-                    bounces += 1;
+                if state.meteor_props.velocity.y <= 0.0 {
+                    state.bounces += 1;
                 }
 
-                meteor_props.velocity.y = meteor_props.velocity.y.abs();
+                state.meteor_props.velocity.y = state.meteor_props.velocity.y.abs();
 
                 let rotation = rng.gen_range(0.0..=std::f32::consts::TAU);
                 let velocity = rng.gen_range(1.0..=5.0);
 
-                meteor_props.velocity.x = velocity * rotation.cos();
-                meteor_props.velocity.z = velocity * rotation.sin();
-            } else if meteor_props.position.y < 0.0 {
-                lost = true;
+                state.meteor_props.velocity.x = velocity * rotation.cos();
+                state.meteor_props.velocity.z = velocity * rotation.sin();
+            } else if state.meteor_props.position.y < 0.0 {
+                state.lost = true;
 
-                meteor_props.position.y -= 100.0;
+                state.meteor_props.position.y -= 100.0;
             }
 
-            if animation_id == 1
-                && animation_time > 0.25
-                && animation_time < 0.75
-                && bounce_sphere_props.scale == 0.0
+            if state.animation_id == 1
+                && state.animation_time > 0.25
+                && state.animation_time < 0.75
+                && state.bounce_sphere_props.scale == 0.0
             {
                 let player_position = Vec3::new(
-                    player_position.x,
-                    heightmap.sample(player_position / 80.0 + 0.5),
-                    player_position.y,
+                    state.player_position.x,
+                    heightmap.sample(state.player_position / 80.0 + 0.5),
+                    state.player_position.y,
                 );
 
-                bounce_sphere_props.scale = 1.0;
-                bounce_sphere_props.position = player_position + Vec3::Y * 4.0;
+                state.bounce_sphere_props.scale = 1.0;
+                state.bounce_sphere_props.position = player_position + Vec3::Y * 4.0;
             }
 
-            animation_time += delta_time;
+            state.animation_time += delta_time;
 
-            while animation_time > capsule.animations[animation_id].total_time() {
-                animation_time -= capsule.animations[animation_id].total_time();
+            while state.animation_time > capsule.animations[state.animation_id].total_time() {
+                state.animation_time -= capsule.animations[state.animation_id].total_time();
 
-                if animation_id == 1 {
-                    animation_id = 0;
+                if state.animation_id == 1 {
+                    state.animation_id = 0;
                 }
             }
 
-            capsule.animations[animation_id].animate(
+            capsule.animations[state.animation_id].animate(
                 &mut player_joints,
-                animation_time,
+                state.animation_time,
                 &capsule.depth_first_nodes,
             );
 
@@ -765,7 +754,7 @@ async fn run() {
                 &meteor_buffer,
                 0,
                 bytemuck::bytes_of(&MeteorGpuProps {
-                    position: meteor_props.position,
+                    position: state.meteor_props.position,
                     _padding: 0,
                 }),
             );
@@ -773,12 +762,12 @@ async fn run() {
             queue.write_buffer(
                 &bounce_sphere_buffer,
                 0,
-                bytemuck::bytes_of(&bounce_sphere_props),
+                bytemuck::bytes_of(&state.bounce_sphere_props),
             );
 
             let view_matrix = {
                 Mat4::look_at_rh(
-                    player_position_3d + player_height_offset + orbit.as_vector(),
+                    player_position_3d + player_height_offset + state.orbit.as_vector(),
                     player_position_3d + player_height_offset,
                     Vec3::Y,
                 )
@@ -790,9 +779,11 @@ async fn run() {
                 bytemuck::bytes_of(&Uniforms {
                     matrices: perspective_matrix * view_matrix,
                     player_position: player_position_3d,
-                    player_facing,
-                    camera_position: player_position_3d + player_height_offset + orbit.as_vector(),
-                    time,
+                    player_facing: state.player_facing,
+                    camera_position: player_position_3d
+                        + player_height_offset
+                        + state.orbit.as_vector(),
+                    time: state.time,
                     window_size: Vec2::new(config.width as f32, config.height as f32),
                     ..Default::default()
                 }),
@@ -1177,9 +1168,9 @@ async fn run() {
                     pipeline,
                     &[
                         BindingResource::Buffer(&uniform_buffer),
-                        BindingResource::Texture(&opaque_texture),
+                        BindingResource::Texture(opaque_texture),
                         BindingResource::Sampler(&sampler),
-                        BindingResource::Texture(&height_map),
+                        BindingResource::Texture(height_map),
                         BindingResource::Buffer(&meteor_buffer),
                     ],
                 );
@@ -1271,13 +1262,15 @@ async fn run() {
                 glyph_brush.queue(wgpu_glyph::Section {
                     screen_position: (16.0, 0.0),
                     bounds: (config.width as f32, config.height as f32),
-                    text: vec![wgpu_glyph::Text::new(&format!("Bounces: {}", bounces))
-                        .with_color([0.0, 0.0, 0.0, 1.0])
-                        .with_scale(24.0 * window.scale_factor() as f32)],
+                    text: vec![
+                        wgpu_glyph::Text::new(&format!("Bounces: {}", state.bounces))
+                            .with_color([0.0, 0.0, 0.0, 1.0])
+                            .with_scale(24.0 * window.scale_factor() as f32),
+                    ],
                     ..wgpu_glyph::Section::default()
                 });
 
-                if lost {
+                if state.lost {
                     glyph_brush.queue(wgpu_glyph::Section {
                         screen_position: (config.width as f32 / 2.0, config.height as f32 / 2.0),
                         bounds: (config.width as f32, config.height as f32),
@@ -1486,9 +1479,50 @@ impl HeightMap {
         self.floats[pos]
     }
 }
+
 fn main() {
     #[cfg(feature = "wasm")]
     wasm_bindgen_futures::spawn_local(run());
     #[cfg(not(feature = "wasm"))]
     pollster::block_on(run());
+}
+
+struct State {
+    player_position: Vec2,
+    player_speed: f32,
+    player_facing: f32,
+    time: f32,
+    orbit: Orbit,
+    bounce_sphere_props: BounceSphereProps,
+    meteor_props: MeteorProps,
+    kbd: KeyboardState,
+    bounces: u32,
+    lost: bool,
+    animation_time: f32,
+    animation_id: usize,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            player_position: Vec2::ZERO,
+            player_speed: 0.0,
+            player_facing: 0.0,
+            time: 0.0,
+            orbit: Orbit::from_vector(Vec3::new(0.0, 1.5, -3.5) * 2.5),
+            bounce_sphere_props: BounceSphereProps {
+                position: Vec3::ZERO,
+                scale: 0.0,
+            },
+            meteor_props: MeteorProps {
+                position: Vec3::Y * 100.0,
+                velocity: Vec3::ZERO,
+            },
+            kbd: KeyboardState::default(),
+            bounces: 0,
+            lost: false,
+            animation_time: 0.0,
+            animation_id: 0,
+        }
+    }
 }
