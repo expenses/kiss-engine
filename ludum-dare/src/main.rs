@@ -85,6 +85,8 @@ fn main() {
     let (tree, _) = Model::new(include_bytes!("../tree.glb"), &device, "tree").unwrap();
     let (house, _) = Model::new(include_bytes!("../house.glb"), &device, "house").unwrap();
 
+    let (meteor, _) = Model::new(include_bytes!("../meteor.glb"), &device, "meteor").unwrap();
+
     let mut perspective_matrix = perspective_matrix_reversed(size.width, size.height);
 
     let size = window.inner_size();
@@ -114,13 +116,18 @@ fn main() {
     let mut player_position = Vec2::new(0.0, 0.0);
     let mut player_speed: f32 = 0.0;
     let mut player_facing = 0.0;
+    let mut time = 0.0;
 
     let mut orbit = Orbit::from_vector(Vec3::new(0.0, 1.5, -3.5) * 2.5);
 
+    let player_height_offset = Vec3::new(0.0, 1.5, 0.0);
+
     let view_matrix = {
         Mat4::look_at_rh(
-            Vec3::new(player_position.x, 0.0, player_position.y) + orbit.as_vector(),
-            Vec3::new(player_position.x, 0.0, player_position.y),
+            Vec3::new(player_position.x, 0.0, player_position.y)
+                + player_height_offset
+                + orbit.as_vector(),
+            Vec3::new(player_position.x, 1.0, player_position.y) + player_height_offset,
             Vec3::Y,
         )
     };
@@ -132,6 +139,10 @@ fn main() {
                 matrices: perspective_matrix * view_matrix,
                 player_position: Vec3::new(player_position.x, 0.0, player_position.y),
                 player_facing,
+                camera_position: Vec3::new(player_position.x, 0.0, player_position.y)
+                    + player_height_offset
+                    + orbit.as_vector(),
+                time,
             }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         },
@@ -222,12 +233,14 @@ fn main() {
 
         let pipeline = device.get_pipeline(
             "bake pipeline",
-            device.device.get_shader_from_bytes(
+            device.device.get_shader(
                 "shaders/compiled/bake_height_map.vert.spv",
+                #[cfg(feature = "standalone")]
                 include_bytes!("../shaders/compiled/bake_height_map.vert.spv"),
             ),
-            device.device.get_shader_from_bytes(
+            device.device.get_shader(
                 "shaders/compiled/bake_height_map.frag.spv",
+                #[cfg(feature = "standalone")]
                 include_bytes!("../shaders/compiled/bake_height_map.frag.spv"),
             ),
             RenderPipelineDesc {
@@ -427,6 +440,13 @@ fn main() {
         "fire giant texture",
     );
 
+    let meteor_tex = load_image(
+        &device,
+        &queue,
+        include_bytes!("../meteor.png"),
+        "meteor texture",
+    );
+
     let sampler = device.create_resource(device.inner.create_sampler(&wgpu::SamplerDescriptor {
         address_mode_u: wgpu::AddressMode::Repeat,
         address_mode_v: wgpu::AddressMode::Repeat,
@@ -525,6 +545,8 @@ fn main() {
 
             let delta_time = 1.0 / 60.0;
 
+            time += delta_time;
+
             if (forwards, right) != (0, 0) {
                 if animation_id == 0 {
                     animation_id = 2;
@@ -575,17 +597,9 @@ fn main() {
                 player_position.y,
             );
 
-            let view_matrix = {
-                Mat4::look_at_rh(
-                    player_position_3d + orbit.as_vector(),
-                    player_position_3d,
-                    Vec3::Y,
-                )
-            };
+            bounce_sphere_props.scale += bounce_sphere_props.scale * delta_time * 0.5;
 
-            bounce_sphere_props.scale += bounce_sphere_props.scale * delta_time * (2.0 / 3.0);
-
-            if bounce_sphere_props.scale > 2.0 {
+            if bounce_sphere_props.scale > 1.5 {
                 bounce_sphere_props.scale = 0.0;
             }
 
@@ -603,9 +617,12 @@ fn main() {
 
             if bounce_sphere_props.scale > 0.0
                 && meteor_props.position.distance(bounce_sphere_props.position)
-                    < (bounce_sphere_props.scale + 2.0)
+                    < (bounce_sphere_props.scale + 1.0)
             {
-                bounces += 1;
+                // This code can run move than once per bounce so we just do this hack lol
+                if meteor_props.velocity.y <= 0.0 {
+                    bounces += 1;
+                }
 
                 meteor_props.velocity.y = meteor_props.velocity.y.abs();
 
@@ -614,8 +631,6 @@ fn main() {
 
                 meteor_props.velocity.x = velocity * rotation.cos();
                 meteor_props.velocity.z = velocity * rotation.sin();
-
-                meteor_props.position += meteor_props.velocity * delta_time;
             } else if meteor_props.position.y < -10.0 {
                 lost = true;
             }
@@ -679,6 +694,14 @@ fn main() {
                 bytemuck::bytes_of(&bounce_sphere_props),
             );
 
+            let view_matrix = {
+                Mat4::look_at_rh(
+                    player_position_3d + player_height_offset + orbit.as_vector(),
+                    player_position_3d + player_height_offset,
+                    Vec3::Y,
+                )
+            };
+
             queue.write_buffer(
                 &uniform_buffer,
                 0,
@@ -686,6 +709,8 @@ fn main() {
                     matrices: perspective_matrix * view_matrix,
                     player_position: player_position_3d,
                     player_facing,
+                    camera_position: player_position_3d + player_height_offset + orbit.as_vector(),
+                    time,
                 }),
             );
 
@@ -757,12 +782,14 @@ fn main() {
 
                 let pipeline = device.get_pipeline(
                     "plane pipeline",
-                    device.device.get_shader_from_bytes(
+                    device.device.get_shader(
                         "shaders/compiled/plane.vert.spv",
+                        #[cfg(feature = "standalone")]
                         include_bytes!("../shaders/compiled/plane.vert.spv"),
                     ),
-                    device.device.get_shader_from_bytes(
+                    device.device.get_shader(
                         "shaders/compiled/plane.frag.spv",
+                        #[cfg(feature = "standalone")]
                         include_bytes!("../shaders/compiled/plane.frag.spv"),
                     ),
                     RenderPipelineDesc {
@@ -816,12 +843,14 @@ fn main() {
 
                 let pipeline = device.get_pipeline(
                     "player pipeline",
-                    device.device.get_shader_from_bytes(
+                    device.device.get_shader(
                         "shaders/compiled/capsule.vert.spv",
+                        #[cfg(feature = "standalone")]
                         include_bytes!("../shaders/compiled/capsule.vert.spv"),
                     ),
-                    device.device.get_shader_from_bytes(
+                    device.device.get_shader(
                         "shaders/compiled/tree.frag.spv",
+                        #[cfg(feature = "standalone")]
                         include_bytes!("../shaders/compiled/tree.frag.spv"),
                     ),
                     RenderPipelineDesc {
@@ -882,13 +911,15 @@ fn main() {
 
                 let pipeline = device.get_pipeline(
                     "meteor pipeline",
-                    device.device.get_shader_from_bytes(
+                    device.device.get_shader(
                         "shaders/compiled/meteor.vert.spv",
+                        #[cfg(feature = "standalone")]
                         include_bytes!("../shaders/compiled/meteor.vert.spv"),
                     ),
-                    device.device.get_shader_from_bytes(
-                        "shaders/compiled/bounce_sphere.frag.spv",
-                        include_bytes!("../shaders/compiled/bounce_sphere.frag.spv"),
+                    device.device.get_shader(
+                        "shaders/compiled/meteor.frag.spv",
+                        #[cfg(feature = "standalone")]
+                        include_bytes!("../shaders/compiled/meteor.frag.spv"),
                     ),
                     RenderPipelineDesc {
                         ..Default::default()
@@ -904,6 +935,11 @@ fn main() {
                             format: wgpu::VertexFormat::Float32x3,
                             step_mode: wgpu::VertexStepMode::Vertex,
                         },
+                        VertexBufferLayout {
+                            location: 2,
+                            format: wgpu::VertexFormat::Float32x2,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                        },
                     ],
                 );
 
@@ -913,28 +949,32 @@ fn main() {
                     &[
                         BindingResource::Buffer(&uniform_buffer),
                         BindingResource::Buffer(&meteor_buffer),
+                        BindingResource::Sampler(&sampler),
+                        BindingResource::Texture(&meteor_tex),
                     ],
                 );
 
                 render_pass.set_pipeline(&pipeline.pipeline);
                 render_pass.set_bind_group(0, bind_group, &[]);
 
-                render_pass.set_vertex_buffer(0, bounce_sphere.positions.slice(..));
-                render_pass.set_vertex_buffer(1, bounce_sphere.normals.slice(..));
-                render_pass
-                    .set_index_buffer(bounce_sphere.indices.slice(..), wgpu::IndexFormat::Uint32);
+                render_pass.set_vertex_buffer(0, meteor.positions.slice(..));
+                render_pass.set_vertex_buffer(1, meteor.normals.slice(..));
+                render_pass.set_vertex_buffer(2, meteor.uvs.slice(..));
+                render_pass.set_index_buffer(meteor.indices.slice(..), wgpu::IndexFormat::Uint32);
 
-                render_pass.draw_indexed(0..bounce_sphere.num_indices, 0, 0..1);
+                render_pass.draw_indexed(0..meteor.num_indices, 0, 0..1);
 
                 {
                     let pipeline = device.get_pipeline(
                         "trees pipeline",
-                        device.device.get_shader_from_bytes(
+                        device.device.get_shader(
                             "shaders/compiled/tree.vert.spv",
+                            #[cfg(feature = "standalone")]
                             include_bytes!("../shaders/compiled/tree.vert.spv"),
                         ),
-                        device.device.get_shader_from_bytes(
+                        device.device.get_shader(
                             "shaders/compiled/tree.frag.spv",
+                            #[cfg(feature = "standalone")]
                             include_bytes!("../shaders/compiled/tree.frag.spv"),
                         ),
                         RenderPipelineDesc {
@@ -990,12 +1030,14 @@ fn main() {
                 {
                     let pipeline = device.get_pipeline(
                         "house pipeline",
-                        device.device.get_shader_from_bytes(
+                        device.device.get_shader(
                             "shaders/compiled/house.vert.spv",
+                            #[cfg(feature = "standalone")]
                             include_bytes!("../shaders/compiled/house.vert.spv"),
                         ),
-                        device.device.get_shader_from_bytes(
+                        device.device.get_shader(
                             "shaders/compiled/tree.frag.spv",
+                            #[cfg(feature = "standalone")]
                             include_bytes!("../shaders/compiled/tree.frag.spv"),
                         ),
                         RenderPipelineDesc {
@@ -1051,12 +1093,14 @@ fn main() {
 
                 let pipeline = device.get_pipeline(
                     "water pipeline",
-                    device.device.get_shader_from_bytes(
+                    device.device.get_shader(
                         "shaders/compiled/plane.vert.spv",
+                        #[cfg(feature = "standalone")]
                         include_bytes!("../shaders/compiled/plane.vert.spv"),
                     ),
-                    device.device.get_shader_from_bytes(
+                    device.device.get_shader(
                         "shaders/compiled/water.frag.spv",
+                        #[cfg(feature = "standalone")]
                         include_bytes!("../shaders/compiled/water.frag.spv"),
                     ),
                     RenderPipelineDesc {
@@ -1099,14 +1143,75 @@ fn main() {
 
                 render_pass.draw_indexed(0..water.num_indices, 0, 0..1);
 
+                {
+                    let pipeline = device.get_pipeline(
+                        "meteor outline pipeline",
+                        device.device.get_shader(
+                            "shaders/compiled/meteor_outline.vert.spv",
+                            #[cfg(feature = "standalone")]
+                            include_bytes!("../shaders/compiled/meteor_outline.vert.spv"),
+                        ),
+                        device.device.get_shader(
+                            "shaders/compiled/meteor_outline.frag.spv",
+                            #[cfg(feature = "standalone")]
+                            include_bytes!("../shaders/compiled/meteor_outline.frag.spv"),
+                        ),
+                        RenderPipelineDesc {
+                            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                            ..Default::default()
+                        },
+                        &[
+                            VertexBufferLayout {
+                                location: 0,
+                                format: wgpu::VertexFormat::Float32x3,
+                                step_mode: wgpu::VertexStepMode::Vertex,
+                            },
+                            VertexBufferLayout {
+                                location: 1,
+                                format: wgpu::VertexFormat::Float32x3,
+                                step_mode: wgpu::VertexStepMode::Vertex,
+                            },
+                            VertexBufferLayout {
+                                location: 2,
+                                format: wgpu::VertexFormat::Float32x2,
+                                step_mode: wgpu::VertexStepMode::Vertex,
+                            },
+                        ],
+                    );
+
+                    let bind_group = device.get_bind_group(
+                        "meteor outline bind group",
+                        pipeline,
+                        &[
+                            BindingResource::Buffer(&uniform_buffer),
+                            BindingResource::Buffer(&meteor_buffer),
+                            BindingResource::Sampler(&sampler),
+                            BindingResource::Texture(&meteor_tex),
+                        ],
+                    );
+
+                    render_pass.set_pipeline(&pipeline.pipeline);
+                    render_pass.set_bind_group(0, bind_group, &[]);
+
+                    render_pass.set_vertex_buffer(0, meteor.positions.slice(..));
+                    render_pass.set_vertex_buffer(1, meteor.normals.slice(..));
+                    render_pass.set_vertex_buffer(2, meteor.uvs.slice(..));
+                    render_pass
+                        .set_index_buffer(meteor.indices.slice(..), wgpu::IndexFormat::Uint32);
+
+                    render_pass.draw_indexed(0..meteor.num_indices, 0, 0..1);
+                }
+
                 let pipeline = device.get_pipeline(
                     "bounce sphere pipeline",
-                    device.device.get_shader_from_bytes(
+                    device.device.get_shader(
                         "shaders/compiled/bounce_sphere.vert.spv",
+                        #[cfg(feature = "standalone")]
                         include_bytes!("../shaders/compiled/bounce_sphere.vert.spv"),
                     ),
-                    device.device.get_shader_from_bytes(
+                    device.device.get_shader(
                         "shaders/compiled/bounce_sphere.frag.spv",
+                        #[cfg(feature = "standalone")]
                         include_bytes!("../shaders/compiled/bounce_sphere.frag.spv"),
                     ),
                     RenderPipelineDesc {
@@ -1432,6 +1537,8 @@ pub struct Uniforms {
     pub matrices: Mat4,
     pub player_position: Vec3,
     pub player_facing: f32,
+    pub camera_position: Vec3,
+    pub time: f32,
 }
 
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

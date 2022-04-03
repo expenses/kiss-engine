@@ -29,10 +29,11 @@ struct Out {
 Out main(In input) {
     Out output;
 
+    float scale = 1.2;
     float rotation_ttime = time * 0.5;
     float3x3 rot = rotation_matrix_y(rotation_ttime) * rotation_matrix_x(rotation_ttime) * rotation_matrix_z(rotation_ttime);
 
-    float3 final_position = position + (rot * input.pos);
+    float3 final_position = position + (rot * scale * input.pos);
 
     output.position = (matrices) * float4(final_position, 1.0);
     output.normal = input.normal;

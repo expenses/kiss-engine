@@ -20,3 +20,6 @@ image = { version = "0.24.1", default-features = false, features = ["png"] }
 wgpu_glyph = "0.16.0"
 wgpu = "0.12.0"
 ordered-float = "2.10.0"
+
+[features]
+standalone = ["kiss-engine-wgpu/standalone"]

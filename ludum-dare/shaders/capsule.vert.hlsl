@@ -1,3 +1,5 @@
+#include "common.h"
+
 [[vk::binding(0)]] cbuffer _ {
     row_major float4x4 matrices;
     float3 player_position;
@@ -24,17 +26,6 @@ struct JointTransform {
 };
 
 [[vk::binding(4)]] StructuredBuffer<JointTransform> joint_transforms;
-
-row_major float3x3 rotation_matrix_y(float theta) {
-    float cos = cos(theta);
-    float sin = sin(theta);
-
-    return float3x3(
-        cos, 0, sin,
-        0, 1, 0,
-        -sin, 0, cos
-    );
-}
 
 Out main(In input) {
     Out output;
