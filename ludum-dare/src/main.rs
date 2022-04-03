@@ -21,8 +21,8 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
 };
 
-pub const Z_NEAR: f32 = 0.01;
-pub const Z_FAR: f32 = 50_000.0;
+pub(crate) const Z_NEAR: f32 = 0.01;
+pub(crate) const Z_FAR: f32 = 50_000.0;
 
 const BASIC_FORMAT: &[VertexBufferLayout] = &[
     VertexBufferLayout {
@@ -573,25 +573,7 @@ async fn run() {
                     },
                 ..
             } => {
-                let pressed = key_state == event::ElementState::Pressed;
-
-                match key {
-                    VirtualKeyCode::W | VirtualKeyCode::Up => state.kbd.up = pressed,
-                    VirtualKeyCode::A | VirtualKeyCode::Left => state.kbd.left = pressed,
-                    VirtualKeyCode::S | VirtualKeyCode::Down => state.kbd.down = pressed,
-                    VirtualKeyCode::D | VirtualKeyCode::Right => state.kbd.right = pressed,
-                    VirtualKeyCode::C if pressed => {
-                        state.orbit.yaw = state.player_facing;
-                    }
-                    VirtualKeyCode::Space if pressed && state.animation_id != 1 => {
-                        state.animation_id = 1;
-                        state.animation_time = 0.0;
-                    }
-                    VirtualKeyCode::R if pressed && state.lost => {
-                        state = State::default();
-                    }
-                    _ => {}
-                }
+                state.handle_key(key, key_state == event::ElementState::Pressed);
             }
             WindowEvent::Focused(false) => {
                 state.kbd = Default::default();
@@ -599,137 +581,9 @@ async fn run() {
             _ => {}
         },
         event::Event::MainEventsCleared => {
-            let current_facing = { state.orbit.yaw };
-
-            let forwards = state.kbd.up as i32 - state.kbd.down as i32;
-            let right = -(state.kbd.right as i32 - state.kbd.left as i32);
-
             let delta_time = 1.0 / 60.0;
 
-            state.time += delta_time;
-
-            if (forwards, right) != (0, 0) {
-                if state.animation_id == 0 {
-                    state.animation_id = 2;
-                    state.animation_time = 0.0;
-                }
-
-                let new_player_facing = current_facing
-                    + match (forwards, right) {
-                        (0, 1) => 90.0_f32.to_radians(),
-                        (0, -1) => -90.0_f32.to_radians(),
-                        (1, 1) => 45.0_f32.to_radians(),
-                        (1, -1) => -45.0_f32.to_radians(),
-
-                        (-1, -1) => -135.0_f32.to_radians(),
-                        (-1, 1) => 135.0_f32.to_radians(),
-
-                        (-1, 0) => 180.0_f32.to_radians(),
-
-                        _ => 0.0,
-                    };
-
-                state.player_facing +=
-                    short_angle_dist(state.player_facing, new_player_facing) * 0.5;
-
-                state.orbit.yaw += short_angle_dist(state.orbit.yaw, state.player_facing) * 0.015;
-
-                state.player_speed = (state.player_speed + delta_time).min(1.0);
-            } else {
-                state.player_speed *= 0.9;
-
-                if state.animation_id == 2 {
-                    state.animation_id = 0;
-                    state.animation_time = 0.0;
-                }
-            }
-
-            let movement = Quat::from_rotation_y(state.player_facing)
-                * Vec3::new(0.0, 0.0, -delta_time * 10.0 * state.player_speed);
-
-            state.player_position.x += movement.x;
-            state.player_position.y += movement.z;
-
-            state.player_position.x = state.player_position.x.max(-40.0).min(40.0);
-            state.player_position.y = state.player_position.y.max(-40.0).min(40.0);
-
-            let player_position_3d = Vec3::new(
-                state.player_position.x,
-                heightmap.sample(state.player_position / 80.0 + 0.5),
-                state.player_position.y,
-            );
-
-            state.bounce_sphere_props.scale += state.bounce_sphere_props.scale * delta_time * 0.5;
-
-            if state.bounce_sphere_props.scale > 1.5 {
-                state.bounce_sphere_props.scale = 0.0;
-            }
-
-            state.meteor_props.velocity.y -= delta_time * 5.0;
-
-            if (state.meteor_props.position.x + state.meteor_props.velocity.x * delta_time).abs()
-                > 40.0
-            {
-                state.meteor_props.velocity.x *= -1.0;
-            }
-
-            if (state.meteor_props.position.z + state.meteor_props.velocity.z * delta_time).abs()
-                > 40.0
-            {
-                state.meteor_props.velocity.z *= -1.0;
-            }
-
-            state.meteor_props.position += state.meteor_props.velocity * delta_time;
-
-            if state.bounce_sphere_props.scale > 0.0
-                && state
-                    .meteor_props
-                    .position
-                    .distance(state.bounce_sphere_props.position)
-                    < (state.bounce_sphere_props.scale + 1.0)
-            {
-                // This code can run move than once per bounce so we just do this hack lol
-                if state.meteor_props.velocity.y <= 0.0 {
-                    state.bounces += 1;
-                }
-
-                state.meteor_props.velocity.y = state.meteor_props.velocity.y.abs();
-
-                let rotation = rng.gen_range(0.0..=std::f32::consts::TAU);
-                let velocity = rng.gen_range(1.0..=5.0);
-
-                state.meteor_props.velocity.x = velocity * rotation.cos();
-                state.meteor_props.velocity.z = velocity * rotation.sin();
-            } else if state.meteor_props.position.y < 0.0 {
-                state.lost = true;
-
-                state.meteor_props.position.y -= 100.0;
-            }
-
-            if state.animation_id == 1
-                && state.animation_time > 0.25
-                && state.animation_time < 0.75
-                && state.bounce_sphere_props.scale == 0.0
-            {
-                let player_position = Vec3::new(
-                    state.player_position.x,
-                    heightmap.sample(state.player_position / 80.0 + 0.5),
-                    state.player_position.y,
-                );
-
-                state.bounce_sphere_props.scale = 1.0;
-                state.bounce_sphere_props.position = player_position + Vec3::Y * 4.0;
-            }
-
-            state.animation_time += delta_time;
-
-            while state.animation_time > capsule.animations[state.animation_id].total_time() {
-                state.animation_time -= capsule.animations[state.animation_id].total_time();
-
-                if state.animation_id == 1 {
-                    state.animation_id = 0;
-                }
-            }
+            state.update(delta_time, &heightmap, &capsule, &mut rng);
 
             capsule.animations[state.animation_id].animate(
                 &mut player_joints,
@@ -765,19 +619,23 @@ async fn run() {
                 bytemuck::bytes_of(&state.bounce_sphere_props),
             );
 
-            let view_matrix = {
-                Mat4::look_at_rh(
-                    player_position_3d + player_height_offset + state.orbit.as_vector(),
-                    player_position_3d + player_height_offset,
-                    Vec3::Y,
-                )
-            };
+            let player_position_3d = state.player_position_3d(&heightmap);
 
             queue.write_buffer(
                 &uniform_buffer,
                 0,
                 bytemuck::bytes_of(&Uniforms {
-                    matrices: perspective_matrix * view_matrix,
+                    matrices: {
+                        let view_matrix = {
+                            Mat4::look_at_rh(
+                                player_position_3d + player_height_offset + state.orbit.as_vector(),
+                                player_position_3d + player_height_offset,
+                                Vec3::Y,
+                            )
+                        };
+
+                        perspective_matrix * view_matrix
+                    },
                     player_position: player_position_3d,
                     player_facing: state.player_facing,
                     camera_position: player_position_3d
@@ -1326,51 +1184,51 @@ struct KeyboardState {
 
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Default)]
 #[repr(C)]
-pub struct Uniforms {
-    pub matrices: Mat4,
-    pub player_position: Vec3,
-    pub player_facing: f32,
-    pub camera_position: Vec3,
-    pub time: f32,
-    pub window_size: Vec2,
-    pub _padding: Vec2,
+pub(crate) struct Uniforms {
+    pub(crate) matrices: Mat4,
+    pub(crate) player_position: Vec3,
+    pub(crate) player_facing: f32,
+    pub(crate) camera_position: Vec3,
+    pub(crate) time: f32,
+    pub(crate) window_size: Vec2,
+    pub(crate) _padding: Vec2,
 }
 
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
-pub struct BounceSphereProps {
-    pub position: Vec3,
-    pub scale: f32,
+pub(crate) struct BounceSphereProps {
+    pub(crate) position: Vec3,
+    pub(crate) scale: f32,
 }
 
-pub struct MeteorProps {
-    pub position: Vec3,
-    pub velocity: Vec3,
+pub(crate) struct MeteorProps {
+    pub(crate) position: Vec3,
+    pub(crate) velocity: Vec3,
 }
 
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
-pub struct MeteorGpuProps {
-    pub position: Vec3,
-    pub _padding: u32,
+pub(crate) struct MeteorGpuProps {
+    pub(crate) position: Vec3,
+    pub(crate) _padding: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
-pub struct Similarity {
-    pub translation: Vec3,
-    pub scale: f32,
-    pub rotation: Quat,
+pub(crate) struct Similarity {
+    pub(crate) translation: Vec3,
+    pub(crate) scale: f32,
+    pub(crate) rotation: Quat,
 }
 
 impl Similarity {
-    pub const IDENTITY: Self = Self {
+    pub(crate) const IDENTITY: Self = Self {
         translation: Vec3::ZERO,
         scale: 1.0,
         rotation: Quat::IDENTITY,
     };
 
-    pub fn as_mat4(self) -> Mat4 {
+    pub(crate) fn as_mat4(self) -> Mat4 {
         Mat4::from_translation(self.translation)
             * Mat4::from_mat3(Mat3::from_quat(self.rotation))
             * Mat4::from_scale(Vec3::splat(self.scale))
@@ -1397,9 +1255,9 @@ impl Mul<Vec3> for Similarity {
     }
 }
 
-pub struct Orbit {
-    pub pitch: f32,
-    pub yaw: f32,
+pub(crate) struct Orbit {
+    pub(crate) pitch: f32,
+    pub(crate) yaw: f32,
     distance: f32,
 }
 
@@ -1413,19 +1271,6 @@ impl Orbit {
             pitch,
             distance,
         }
-    }
-
-    pub fn rotate(&mut self, delta: Vec2) {
-        use std::f32::consts::PI;
-        let speed = 0.15;
-        self.yaw -= delta.x.to_radians() * speed;
-        self.pitch = (self.pitch - delta.y.to_radians() * speed)
-            .max(std::f32::EPSILON)
-            .min(PI / 2.0);
-    }
-
-    pub fn zoom(&mut self, delta: f32) {
-        self.distance = (self.distance + delta * 0.5).max(1.0).min(10.0);
     }
 
     fn as_vector(&self) -> Vec3 {
@@ -1529,6 +1374,155 @@ impl Default for State {
             lost: false,
             animation_time: 0.0,
             animation_id: 0,
+        }
+    }
+}
+
+impl State {
+    fn player_position_3d(&self, heightmap: &HeightMap) -> Vec3 {
+        Vec3::new(
+            self.player_position.x,
+            heightmap.sample(self.player_position / 80.0 + 0.5),
+            self.player_position.y,
+        )
+    }
+
+    fn update(
+        &mut self,
+        delta_time: f32,
+        heightmap: &HeightMap,
+        player_model: &Model,
+        rng: &mut rand::rngs::OsRng,
+    ) {
+        self.time += delta_time;
+
+        let forwards = self.kbd.up as i32 - self.kbd.down as i32;
+        let right = self.kbd.right as i32 - self.kbd.left as i32;
+
+        if (forwards, right) != (0, 0) {
+            if self.animation_id == 0 {
+                self.animation_id = 2;
+                self.animation_time = 0.0;
+            }
+
+            let new_player_facing = self.orbit.yaw
+                + match (forwards, right) {
+                    (0, 1) => -90.0_f32.to_radians(),
+                    (0, -1) => 90.0_f32.to_radians(),
+                    (1, 1) => -45.0_f32.to_radians(),
+                    (1, -1) => 45.0_f32.to_radians(),
+
+                    (-1, -1) => 135.0_f32.to_radians(),
+                    (-1, 1) => -135.0_f32.to_radians(),
+
+                    (-1, 0) => 180.0_f32.to_radians(),
+
+                    _ => 0.0,
+                };
+
+            self.player_facing += short_angle_dist(self.player_facing, new_player_facing) * 0.5;
+
+            self.orbit.yaw += short_angle_dist(self.orbit.yaw, self.player_facing) * 0.015;
+
+            self.player_speed = (self.player_speed + delta_time).min(1.0);
+        } else {
+            self.player_speed *= 0.9;
+
+            if self.animation_id == 2 {
+                self.animation_id = 0;
+                self.animation_time = 0.0;
+            }
+        }
+
+        let movement = Quat::from_rotation_y(self.player_facing)
+            * Vec3::new(0.0, 0.0, -delta_time * 10.0 * self.player_speed);
+
+        self.player_position.x += movement.x;
+        self.player_position.y += movement.z;
+
+        self.player_position.x = self.player_position.x.max(-40.0).min(40.0);
+        self.player_position.y = self.player_position.y.max(-40.0).min(40.0);
+
+        self.bounce_sphere_props.scale += self.bounce_sphere_props.scale * delta_time * 0.5;
+
+        if self.bounce_sphere_props.scale > 1.5 {
+            self.bounce_sphere_props.scale = 0.0;
+        }
+
+        self.meteor_props.velocity.y -= delta_time * 5.0;
+
+        if (self.meteor_props.position.x + self.meteor_props.velocity.x * delta_time).abs() > 40.0 {
+            self.meteor_props.velocity.x *= -1.0;
+        }
+
+        if (self.meteor_props.position.z + self.meteor_props.velocity.z * delta_time).abs() > 40.0 {
+            self.meteor_props.velocity.z *= -1.0;
+        }
+
+        self.meteor_props.position += self.meteor_props.velocity * delta_time;
+
+        if self.bounce_sphere_props.scale > 0.0
+            && self
+                .meteor_props
+                .position
+                .distance(self.bounce_sphere_props.position)
+                < (self.bounce_sphere_props.scale + 1.0)
+        {
+            // This code can run move than once per bounce so we just do this hack lol
+            if self.meteor_props.velocity.y <= 0.0 {
+                self.bounces += 1;
+            }
+
+            self.meteor_props.velocity.y = self.meteor_props.velocity.y.abs();
+
+            let rotation = rng.gen_range(0.0..=std::f32::consts::TAU);
+            let velocity = rng.gen_range(1.0..=5.0);
+
+            self.meteor_props.velocity.x = velocity * rotation.cos();
+            self.meteor_props.velocity.z = velocity * rotation.sin();
+        } else if self.meteor_props.position.y < 0.0 {
+            self.lost = true;
+
+            self.meteor_props.position.y -= 100.0;
+        }
+
+        if self.animation_id == 1
+            && self.animation_time > 0.25
+            && self.animation_time < 0.75
+            && self.bounce_sphere_props.scale == 0.0
+        {
+            self.bounce_sphere_props.scale = 1.0;
+            self.bounce_sphere_props.position = self.player_position_3d(heightmap) + Vec3::Y * 4.0;
+        }
+
+        self.animation_time += delta_time;
+
+        while self.animation_time > player_model.animations[self.animation_id].total_time() {
+            self.animation_time -= player_model.animations[self.animation_id].total_time();
+
+            if self.animation_id == 1 {
+                self.animation_id = 0;
+            }
+        }
+    }
+
+    fn handle_key(&mut self, key: VirtualKeyCode, pressed: bool) {
+        match key {
+            VirtualKeyCode::W | VirtualKeyCode::Up => self.kbd.up = pressed,
+            VirtualKeyCode::A | VirtualKeyCode::Left => self.kbd.left = pressed,
+            VirtualKeyCode::S | VirtualKeyCode::Down => self.kbd.down = pressed,
+            VirtualKeyCode::D | VirtualKeyCode::Right => self.kbd.right = pressed,
+            VirtualKeyCode::C if pressed => {
+                self.orbit.yaw = self.player_facing;
+            }
+            VirtualKeyCode::Space if pressed && self.animation_id != 1 => {
+                self.animation_id = 1;
+                self.animation_time = 0.0;
+            }
+            VirtualKeyCode::R if pressed && self.lost => {
+                *self = Self::default();
+            }
+            _ => {}
         }
     }
 }

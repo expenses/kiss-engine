@@ -371,7 +371,7 @@ impl<T> std::ops::Deref for Resource<T> {
 pub enum BindingResource<'a> {
     Buffer(&'a Resource<wgpu::Buffer>),
     Sampler(&'a Resource<wgpu::Sampler>),
-    Texture(&'a Resource<TextureInner>),
+    Texture(&'a Resource<Texture>),
 }
 
 impl<'a> BindingResource<'a> {
@@ -384,13 +384,13 @@ impl<'a> BindingResource<'a> {
     }
 }
 
-pub struct TextureInner {
+pub struct Texture {
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
 }
 
-struct Texture {
-    texture: Resource<TextureInner>,
+struct TextureWithExtent {
+    texture: Resource<Texture>,
     extent: wgpu::Extent3d,
 }
 
@@ -399,7 +399,7 @@ pub struct Device {
     pipelines: CacheMap<&'static str, RenderPipeline>,
     bind_groups: CacheMap<&'static str, BindGroup>,
     shaders: CacheMap<&'static str, Arc<ReloadableShader>>,
-    textures: CacheMap<&'static str, Texture>,
+    textures: CacheMap<&'static str, TextureWithExtent>,
     pub next_resource_id: std::sync::atomic::AtomicU32,
 }
 
@@ -585,14 +585,14 @@ impl Device {
     pub fn get_texture(
         &self,
         descriptor: &wgpu::TextureDescriptor<'static>,
-    ) -> &Resource<TextureInner> {
+    ) -> &Resource<Texture> {
         let name = descriptor.label.expect("TextureDescriptor needs a label");
 
-        let create_texture_fn = || Texture {
+        let create_texture_fn = || TextureWithExtent {
             texture: self.create_resource({
                 let texture = self.inner.create_texture(descriptor);
 
-                TextureInner {
+                Texture {
                     view: texture.create_view(&Default::default()),
                     texture,
                 }
@@ -611,7 +611,7 @@ impl Device {
         }
     }
 
-    pub fn try_get_cached_texture(&self, name: &'static str) -> Option<&Resource<TextureInner>> {
+    pub fn try_get_cached_texture(&self, name: &'static str) -> Option<&Resource<Texture>> {
         self.textures.try_get(&name).map(|tex| &tex.texture)
     }
 }

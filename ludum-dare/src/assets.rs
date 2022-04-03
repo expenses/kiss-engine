@@ -3,27 +3,27 @@ use glam::Mat4;
 use glam::Quat;
 use glam::Vec2;
 use glam::Vec3;
-use kiss_engine_wgpu::Device;
+use kiss_engine_wgpu::{Device, Resource, Texture};
 use wgpu::util::DeviceExt;
 
 use crate::animation;
 
-pub struct Model {
+pub(crate) struct Model {
     positions: wgpu::Buffer,
     normals: wgpu::Buffer,
     uvs: wgpu::Buffer,
     indices: wgpu::Buffer,
     num_indices: u32,
-    pub joints: wgpu::Buffer,
-    pub weights: wgpu::Buffer,
-    pub depth_first_nodes: Vec<(usize, Option<usize>)>,
-    pub animations: Vec<animation::Animation>,
-    pub inverse_bind_matrices: Vec<Mat4>,
-    pub joint_indices_to_node_indices: Vec<usize>,
+    pub(crate) joints: wgpu::Buffer,
+    pub(crate) weights: wgpu::Buffer,
+    pub(crate) depth_first_nodes: Vec<(usize, Option<usize>)>,
+    pub(crate) animations: Vec<animation::Animation>,
+    pub(crate) inverse_bind_matrices: Vec<Mat4>,
+    pub(crate) joint_indices_to_node_indices: Vec<usize>,
 }
 
 impl Model {
-    pub fn new(
+    pub(crate) fn new(
         bytes: &[u8],
         device: &wgpu::Device,
         name: &str,
@@ -166,7 +166,7 @@ impl Model {
         )
     }
 
-    pub fn render<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>, num_instances: u32) {
+    pub(crate) fn render<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>, num_instances: u32) {
         render_pass.set_vertex_buffer(0, self.positions.slice(..));
         render_pass.set_vertex_buffer(1, self.normals.slice(..));
         render_pass.set_vertex_buffer(2, self.uvs.slice(..));
@@ -176,7 +176,7 @@ impl Model {
     }
 }
 
-pub struct NodeTree {
+struct NodeTree {
     inner: Vec<(Similarity, usize)>,
 }
 
@@ -211,7 +211,7 @@ impl NodeTree {
         Self { inner }
     }
 
-    pub fn transform_of(&self, mut index: usize) -> Similarity {
+    pub(crate) fn transform_of(&self, mut index: usize) -> Similarity {
         let mut transform_sum = Similarity::IDENTITY;
 
         while index != usize::max_value() {
@@ -242,12 +242,12 @@ impl NodeTree {
     }
 }
 
-pub fn load_image(
+pub(crate) fn load_image(
     device: &Device,
     queue: &wgpu::Queue,
     bytes: &[u8],
     name: &str,
-) -> kiss_engine_wgpu::Resource<kiss_engine_wgpu::TextureInner> {
+) -> Resource<Texture> {
     let image = image::load_from_memory(bytes)
         .expect("Failed to read image")
         .to_rgba8();
@@ -270,7 +270,7 @@ pub fn load_image(
         &*image,
     );
 
-    device.create_resource(kiss_engine_wgpu::TextureInner {
+    device.create_resource(Texture {
         view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
         texture,
     })
