@@ -21,8 +21,8 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
 };
 
-pub(crate) const Z_NEAR: f32 = 0.01;
-pub(crate) const Z_FAR: f32 = 50_000.0;
+const Z_NEAR: f32 = 0.01;
+const Z_FAR: f32 = 50_000.0;
 
 const BASIC_FORMAT: &[VertexBufferLayout] = &[
     VertexBufferLayout {
@@ -232,8 +232,16 @@ async fn run() {
 
     let bounce_sphere_buffer = device.create_resource(device.inner.create_buffer_init(
         &wgpu::util::BufferInitDescriptor {
-            label: Some("bounce sphere buffer buffer"),
+            label: Some("bounce sphere buffer"),
             contents: bytemuck::bytes_of(&state.bounce_sphere_props),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        },
+    ));
+
+    let ripple_buffer = device.create_resource(device.inner.create_buffer_init(
+        &wgpu::util::BufferInitDescriptor {
+            label: Some("ripple buffer"),
+            contents: bytemuck::cast_slice(&state.ripples),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         },
     ));
@@ -510,6 +518,13 @@ async fn run() {
         "meteor texture",
     );
 
+    let ripple_tex = load_image(
+        &device,
+        &queue,
+        include_bytes!("../ripple.png"),
+        "ripple texture",
+    );
+
     let sampler = device.create_resource(device.inner.create_sampler(&wgpu::SamplerDescriptor {
         address_mode_u: wgpu::AddressMode::Repeat,
         address_mode_v: wgpu::AddressMode::Repeat,
@@ -618,6 +633,8 @@ async fn run() {
                 0,
                 bytemuck::bytes_of(&state.bounce_sphere_props),
             );
+
+            queue.write_buffer(&ripple_buffer, 0, bytemuck::bytes_of(&state.ripples));
 
             let player_position_3d = state.player_position_3d(&heightmap);
 
@@ -1112,6 +1129,44 @@ async fn run() {
                 render_pass.set_bind_group(0, bind_group, &[]);
 
                 bounce_sphere.render(&mut render_pass, 1);
+
+                let pipeline = device.get_pipeline(
+                    "ripple pipeline",
+                    device.device.get_shader(
+                        "shaders/compiled/ripple.vert.spv",
+                        #[cfg(feature = "standalone")]
+                        include_bytes!("../shaders/compiled/ripple.vert.spv"),
+                        Default::default(),
+                    ),
+                    device.device.get_shader(
+                        "shaders/compiled/ripple.frag.spv",
+                        #[cfg(feature = "standalone")]
+                        include_bytes!("../shaders/compiled/ripple.frag.spv"),
+                        Default::default(),
+                    ),
+                    RenderPipelineDesc {
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        ..Default::default()
+                    },
+                    BASIC_FORMAT,
+                );
+
+                let bind_group = device.get_bind_group(
+                    "ripple",
+                    pipeline,
+                    &[
+                        BindingResource::Buffer(&uniform_buffer),
+                        BindingResource::Buffer(&ripple_buffer),
+                        BindingResource::Buffer(&meteor_buffer),
+                        BindingResource::Sampler(&sampler),
+                        BindingResource::Texture(&ripple_tex),
+                    ],
+                );
+
+                render_pass.set_pipeline(&pipeline.pipeline);
+                render_pass.set_bind_group(0, bind_group, &[]);
+
+                water.render(&mut render_pass, state.ripples.len() as u32);
             }
 
             drop(render_pass);
@@ -1184,51 +1239,58 @@ struct KeyboardState {
 
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Default)]
 #[repr(C)]
-pub(crate) struct Uniforms {
-    pub(crate) matrices: Mat4,
-    pub(crate) player_position: Vec3,
-    pub(crate) player_facing: f32,
-    pub(crate) camera_position: Vec3,
-    pub(crate) time: f32,
-    pub(crate) window_size: Vec2,
-    pub(crate) _padding: Vec2,
+struct Uniforms {
+    matrices: Mat4,
+    player_position: Vec3,
+    player_facing: f32,
+    camera_position: Vec3,
+    time: f32,
+    window_size: Vec2,
+    _padding: Vec2,
 }
 
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
-pub(crate) struct BounceSphereProps {
-    pub(crate) position: Vec3,
-    pub(crate) scale: f32,
+struct BounceSphereProps {
+    position: Vec3,
+    scale: f32,
 }
 
-pub(crate) struct MeteorProps {
-    pub(crate) position: Vec3,
-    pub(crate) velocity: Vec3,
+struct MeteorProps {
+    position: Vec3,
+    velocity: Vec3,
 }
 
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
-pub(crate) struct MeteorGpuProps {
-    pub(crate) position: Vec3,
-    pub(crate) _padding: u32,
+struct RippleProps {
+    position: Vec3,
+    time: f32,
+}
+
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+struct MeteorGpuProps {
+    position: Vec3,
+    _padding: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
-pub(crate) struct Similarity {
-    pub(crate) translation: Vec3,
-    pub(crate) scale: f32,
-    pub(crate) rotation: Quat,
+struct Similarity {
+    translation: Vec3,
+    scale: f32,
+    rotation: Quat,
 }
 
 impl Similarity {
-    pub(crate) const IDENTITY: Self = Self {
+    const IDENTITY: Self = Self {
         translation: Vec3::ZERO,
         scale: 1.0,
         rotation: Quat::IDENTITY,
     };
 
-    pub(crate) fn as_mat4(self) -> Mat4 {
+    fn as_mat4(self) -> Mat4 {
         Mat4::from_translation(self.translation)
             * Mat4::from_mat3(Mat3::from_quat(self.rotation))
             * Mat4::from_scale(Vec3::splat(self.scale))
@@ -1255,9 +1317,9 @@ impl Mul<Vec3> for Similarity {
     }
 }
 
-pub(crate) struct Orbit {
-    pub(crate) pitch: f32,
-    pub(crate) yaw: f32,
+struct Orbit {
+    pitch: f32,
+    yaw: f32,
     distance: f32,
 }
 
@@ -1351,6 +1413,7 @@ struct State {
     lost: bool,
     animation_time: f32,
     animation_id: usize,
+    ripples: [RippleProps; 4],
 }
 
 impl Default for State {
@@ -1374,6 +1437,24 @@ impl Default for State {
             lost: false,
             animation_time: 0.0,
             animation_id: 0,
+            ripples: [
+                RippleProps {
+                    position: Vec3::new(0.0, 0.001, 0.0),
+                    time: 0.0,
+                },
+                RippleProps {
+                    position: Vec3::new(0.0, 0.00101, 0.0),
+                    time: 0.5,
+                },
+                RippleProps {
+                    position: Vec3::new(0.0, 0.00102, 0.0),
+                    time: 1.0,
+                },
+                RippleProps {
+                    position: Vec3::new(0.0, 0.00103, 0.0),
+                    time: 1.5,
+                },
+            ],
         }
     }
 }
@@ -1502,6 +1583,17 @@ impl State {
 
             if self.animation_id == 1 {
                 self.animation_id = 0;
+            }
+        }
+
+        for ripple in &mut self.ripples {
+            ripple.time += delta_time;
+
+            if ripple.time > 2.0 || (self.player_position.distance(Vec2::new(ripple.position.x, ripple.position.z)) > 10.0) {
+                ripple.time = (ripple.time - 2.0).max(0.0);
+
+                ripple.position.x = self.player_position.x;
+                ripple.position.z = self.player_position.y;
             }
         }
     }

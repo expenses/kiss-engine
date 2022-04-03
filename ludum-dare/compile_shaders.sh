@@ -16,3 +16,6 @@ glslc -fshader-stage=frag shaders/meteor.frag.hlsl -o   shaders/compiled/meteor.
 
 glslc -fshader-stage=vert shaders/meteor_outline.vert.hlsl -o   shaders/compiled/meteor_outline.vert.spv
 glslc -fshader-stage=frag shaders/meteor_outline.frag.hlsl -o   shaders/compiled/meteor_outline.frag.spv
+
+glslc -fshader-stage=vert shaders/ripple.vert.hlsl -o   shaders/compiled/ripple.vert.spv
+glslc -fshader-stage=frag shaders/ripple.frag.hlsl -o   shaders/compiled/ripple.frag.spv
