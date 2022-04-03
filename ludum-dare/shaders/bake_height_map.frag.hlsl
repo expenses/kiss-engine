@@ -3,14 +3,14 @@ struct In {
 };
 
 struct Out {
-    [[vk::location(0)]] float height: TEXCOORD0;
+    [[vk::location(0)]] float4 height: TEXCOORD0;
 };
 
 
 Out main(In input) {
     Out output;
 
-    output.height = input.height;
+    output.height = float4(input.height);
 
     return output;
 }

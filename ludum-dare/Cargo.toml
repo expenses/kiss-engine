@@ -20,6 +20,13 @@ image = { version = "0.24.1", default-features = false, features = ["png"] }
 wgpu_glyph = "0.16.0"
 wgpu = "0.12.0"
 ordered-float = "2.10.0"
+getrandom = { version = "0.2.6", features = ["js"], optional = true }
+console_error_panic_hook = { version = "0.1.7", optional = true }
+wasm-web-helpers = { path = "../wasm-web-helpers", optional = true }
+console_log = { version = "0.2.0", optional = true }
+wasm-bindgen-futures = { version = "0.4.29", optional = true }
+
 
 [features]
 standalone = ["kiss-engine-wgpu/standalone"]
+wasm = ["standalone", "wgpu/webgl", "rand/getrandom", "getrandom", "console_error_panic_hook", "wasm-web-helpers", "console_log", "wasm-bindgen-futures"]

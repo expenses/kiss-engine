@@ -25,7 +25,9 @@ struct JointTransform {
     row_major float4x4 inner;
 };
 
-[[vk::binding(4)]] StructuredBuffer<JointTransform> joint_transforms;
+[[vk::binding(4)]] cbuffer _ {
+    JointTransform joint_transforms[10];
+};
 
 Out main(In input) {
     Out output;

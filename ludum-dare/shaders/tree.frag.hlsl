@@ -25,9 +25,11 @@ Out main(In input) {
 
     float diffuse = max(dot(normalize(input.normal), SUN_DIR), 0.1);
 
-    output.color = float4(forest_tex.Sample(tex_sampler, input.uv) * diffuse, 1.0);
+    float3 color = forest_tex.Sample(tex_sampler, input.uv) * diffuse;
 
-    output.color *= shadow_factor(input.position, meteor_position);
+    color *= shadow_factor(input.position, meteor_position);
+
+    output.color = float4(color, 1.0);
     output.color2 = output.color;
 
 

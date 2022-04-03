@@ -38,7 +38,19 @@ fn perspective_matrix_reversed(width: u32, height: u32) -> glam::Mat4 {
     )
 }
 
-fn main() {
+async fn run() {
+    #[cfg(feature = "wasm")]
+    {
+        std::panic::set_hook(Box::new(console_error_panic_hook::hook));
+
+        let level: log::Level = wasm_web_helpers::parse_url_query_string_from_window("RUST_LOG")
+            .map(|x| x.parse().ok())
+            .flatten()
+            .unwrap_or(log::Level::Info);
+        console_log::init_with_level(level).expect("could not initialize logger");
+    }
+
+    #[cfg(not(feature = "wasm"))]
     env_logger::init();
 
     let event_loop = EventLoop::new();
@@ -46,17 +58,25 @@ fn main() {
 
     let window = builder.build(&event_loop).unwrap();
 
+    #[cfg(feature = "wasm")]
+    {
+        // On wasm, append the canvas to the document body
+        wasm_web_helpers::append_canvas(&window);
+    }
+
     let backend = wgpu::util::backend_bits_from_env().unwrap_or_else(wgpu::Backends::all);
 
     let instance = wgpu::Instance::new(backend);
     let size = window.inner_size();
     let surface = unsafe { instance.create_surface(&window) };
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        force_fallback_adapter: false,
-        compatible_surface: Some(&surface),
-    }))
-    .expect("No suitable GPU adapters found on the system!");
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: Some(&surface),
+        })
+        .await
+        .expect("No suitable GPU adapters found on the system!");
 
     let adapter_info = adapter.get_info();
     println!(
@@ -64,15 +84,17 @@ fn main() {
         adapter_info.name, adapter_info.backend
     );
 
-    let (device, queue) = pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("device"),
-            features: Default::default(),
-            limits: Default::default(),
-        },
-        None,
-    ))
-    .expect("Unable to find a suitable GPU adapter!");
+    let (device, queue) = adapter
+        .request_device(
+            &wgpu::DeviceDescriptor {
+                label: Some("device"),
+                features: Default::default(),
+                limits: wgpu::Limits::downlevel_webgl2_defaults(),
+            },
+            None,
+        )
+        .await
+        .expect("Unable to find a suitable GPU adapter!");
 
     let (plane, _) = Model::new(include_bytes!("../plane.glb"), &device, "plane").unwrap();
     let (capsule, mut player_joints) =
@@ -193,14 +215,15 @@ fn main() {
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::R32Float,
+        // Has to be rgba float because of webgl.
+        format: wgpu::TextureFormat::Rgba32Float,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
             | wgpu::TextureUsages::COPY_SRC,
         label: Some("height map"),
     });
 
-    let buffer_size = 1024 * 1024 * 4;
+    let buffer_size = 1024 * 1024 * 4 * 4;
 
     let target_buffer = device.inner.create_buffer(&wgpu::BufferDescriptor {
         label: None,
@@ -234,7 +257,7 @@ fn main() {
             depth_stencil_attachment: None,
         });
 
-        let device = device.with_formats(&[wgpu::TextureFormat::R32Float], None);
+        let device = device.with_formats(&[wgpu::TextureFormat::Rgba32Float], None);
 
         let pipeline = device.get_pipeline(
             "bake pipeline",
@@ -291,7 +314,7 @@ fn main() {
             wgpu::ImageCopyBuffer {
                 buffer: &target_buffer,
                 layout: wgpu::ImageDataLayout {
-                    bytes_per_row: Some(std::num::NonZeroU32::new(1024 * 4).unwrap()),
+                    bytes_per_row: Some(std::num::NonZeroU32::new(1024 * 4 * 4).unwrap()),
                     ..Default::default()
                 },
             },
@@ -305,7 +328,7 @@ fn main() {
         queue.submit(std::iter::once(encoder.finish()));
     }
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rngs::OsRng::default();
 
     let heightmap = {
         let slice = target_buffer.slice(..);
@@ -314,16 +337,22 @@ fn main() {
 
         device.inner.poll(wgpu::Maintain::Wait);
 
-        pollster::block_on(map_future).unwrap();
+        map_future.await.unwrap();
 
         let bytes = slice.get_mapped_range();
 
+        let vec4s: &[Vec4] = bytemuck::cast_slice(&bytes);
+
         HeightMap {
-            floats: bytemuck::cast_slice(&bytes).to_vec(),
+            floats: vec4s.iter().map(|vec4| vec4.x).collect(),
             height: 1024,
             width: 1024,
         }
     };
+
+    target_buffer.unmap();
+
+    drop(target_buffer);
 
     let forest_map = {
         let image = image::load_from_memory(include_bytes!("../forestmap.png"))
@@ -339,43 +368,55 @@ fn main() {
 
     let mut forest_points = Vec::new();
 
-    while forest_points.len() < 1000 {
-        let x = rng.gen_range(0.0..1.0);
-        let y = rng.gen_range(0.0..1.0);
+    let infinite_loop_cap = 10000;
 
-        let value = rng.gen_range(0.0..1.0);
+    // Bound this loop as it could go infinite otherwise.
+    // I'm doing this because I had some issues with the heightmap on webgl.
+    for _ in 0..infinite_loop_cap {
+        if forest_points.len() < 1000 {
+            let x = rng.gen_range(0.0..1.0);
+            let y = rng.gen_range(0.0..1.0);
 
-        let heightmap_pos = heightmap.sample(Vec2::new(x, y));
+            let value = rng.gen_range(0.0..1.0);
 
-        if forest_map.sample(Vec2::new(x, y)) > value && heightmap_pos < 4.5 && heightmap_pos > 0.25
-        {
-            forest_points.push(Vec4::new(
-                (x - 0.5) * 80.0,
-                heightmap_pos,
-                (y - 0.5) * 80.0,
-                rng.gen_range(0.6..0.8),
-            ));
+            let heightmap_pos = heightmap.sample(Vec2::new(x, y));
+
+            if forest_map.sample(Vec2::new(x, y)) > value
+                && heightmap_pos < 4.5
+                && heightmap_pos > 0.25
+            {
+                forest_points.push(Vec4::new(
+                    (x - 0.5) * 80.0,
+                    heightmap_pos,
+                    (y - 0.5) * 80.0,
+                    rng.gen_range(0.6..0.8),
+                ));
+            }
         }
     }
 
     let mut house_points = Vec::new();
 
-    while house_points.len() < 50 {
-        let x = rng.gen_range(0.0..1.0);
-        let y = rng.gen_range(0.0..1.0);
+    for _ in 0..infinite_loop_cap {
+        if house_points.len() < 50 {
+            let x = rng.gen_range(0.0..1.0);
+            let y = rng.gen_range(0.0..1.0);
 
-        let value = rng.gen_range(0.0..1.0);
+            let value = rng.gen_range(0.0..1.0);
 
-        let heightmap_pos = heightmap.sample(Vec2::new(x, y));
+            let heightmap_pos = heightmap.sample(Vec2::new(x, y));
 
-        if forest_map.sample(Vec2::new(x, y)) < value && heightmap_pos < 4.5 && heightmap_pos > 0.25
-        {
-            house_points.push(Vec4::new(
-                (x - 0.5) * 80.0,
-                heightmap_pos,
-                (y - 0.5) * 80.0,
-                rng.gen_range(0.0..std::f32::consts::TAU),
-            ));
+            if forest_map.sample(Vec2::new(x, y)) < value
+                && heightmap_pos < 4.5
+                && heightmap_pos > 0.25
+            {
+                house_points.push(Vec4::new(
+                    (x - 0.5) * 80.0,
+                    heightmap_pos,
+                    (y - 0.5) * 80.0,
+                    rng.gen_range(0.0..std::f32::consts::TAU),
+                ));
+            }
         }
     }
 
@@ -397,10 +438,6 @@ fn main() {
             usage: wgpu::BufferUsages::VERTEX,
         },
     ));
-
-    target_buffer.unmap();
-
-    drop(target_buffer);
 
     let grass_texture = load_image(
         &device,
@@ -480,7 +517,7 @@ fn main() {
             label: Some("player joint transforms"),
             size: (capsule.joint_indices_to_node_indices.len() * std::mem::size_of::<Mat4>())
                 as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
             mapped_at_creation: false,
         }));
 
@@ -1817,4 +1854,11 @@ fn load_image(
         view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
         texture,
     })
+}
+
+fn main() {
+    #[cfg(feature = "wasm")]
+    wasm_bindgen_futures::spawn_local(run());
+    #[cfg(not(feature = "wasm"))]
+    pollster::block_on(run());
 }

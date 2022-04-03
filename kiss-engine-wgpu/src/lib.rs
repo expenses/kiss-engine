@@ -81,7 +81,9 @@ fn reflect_bind_group_layout_entries(
                     })
                 }
                 rspirv_reflect::DescriptorType::SAMPLED_IMAGE => wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: settings.allow_texture_filtering },
+                    sample_type: wgpu::TextureSampleType::Float {
+                        filterable: settings.allow_texture_filtering,
+                    },
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
@@ -188,13 +190,12 @@ fn create_render_pipeline(
         .map(|layout| layout.attribute_array())
         .collect::<Vec<_>>();
 
-    let targets: Vec<_> = attachment_texture_formats.iter()
-        .map(|&format| {
-            wgpu::ColorTargetState {
-                format,
-                blend: render_pipeline_desc.blend,
-                write_mask: wgpu::ColorWrites::ALL
-            }
+    let targets: Vec<_> = attachment_texture_formats
+        .iter()
+        .map(|&format| wgpu::ColorTargetState {
+            format,
+            blend: render_pipeline_desc.blend,
+            write_mask: wgpu::ColorWrites::ALL,
         })
         .collect();
 
@@ -316,7 +317,12 @@ struct Shader {
 }
 
 impl Shader {
-    fn load(device: &wgpu::Device, filename: &str, bytes: &[u8], bind_group_layout_settings: &BindGroupLayoutSettings) -> Self {
+    fn load(
+        device: &wgpu::Device,
+        filename: &str,
+        bytes: &[u8],
+        bind_group_layout_settings: &BindGroupLayoutSettings,
+    ) -> Self {
         Self {
             module: device.create_shader_module(&wgpu::ShaderModuleDescriptor {
                 label: Some(filename),
@@ -406,13 +412,22 @@ impl Device {
         }
     }
 
-    #[cfg(not(any(target_arch = "wasm32", feature = "standalone")))]
-    pub fn get_shader(&self, filename: &'static str, bind_group_layout_settings: BindGroupLayoutSettings) -> &ReloadableShader {
+    #[cfg(not(feature = "standalone"))]
+    pub fn get_shader(
+        &self,
+        filename: &'static str,
+        bind_group_layout_settings: BindGroupLayoutSettings,
+    ) -> &ReloadableShader {
         self.shaders.get_or_insert_with(filename, || {
             let bytes = std::fs::read(filename).unwrap();
 
             let shader = Arc::new(ReloadableShader {
-                shader: parking_lot::Mutex::new(Shader::load(&self.inner, filename, &bytes, &bind_group_layout_settings)),
+                shader: parking_lot::Mutex::new(Shader::load(
+                    &self.inner,
+                    filename,
+                    &bytes,
+                    &bind_group_layout_settings,
+                )),
                 version: Default::default(),
             });
 
@@ -433,7 +448,8 @@ impl Device {
                     for _ in rx.iter() {
                         log::info!("Reloading {}", filename);
                         let bytes = std::fs::read(filename).unwrap();
-                        *shader.shader.lock() = Shader::load(&device, filename, &bytes, &bind_group_layout_settings);
+                        *shader.shader.lock() =
+                            Shader::load(&device, filename, &bytes, &bind_group_layout_settings);
                         shader
                             .version
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -447,11 +463,21 @@ impl Device {
         })
     }
 
-    #[cfg(any(target_arch = "wasm32", feature = "standalone"))]
-    pub fn get_shader(&self, filename: &'static str, bytes: &[u8], bind_group_layout_settings: BindGroupLayoutSettings) -> &ReloadableShader {
+    #[cfg(feature = "standalone")]
+    pub fn get_shader(
+        &self,
+        filename: &'static str,
+        bytes: &[u8],
+        bind_group_layout_settings: BindGroupLayoutSettings,
+    ) -> &ReloadableShader {
         self.shaders.get_or_insert_with(filename, || {
             let shader = Arc::new(ReloadableShader {
-                shader: parking_lot::Mutex::new(Shader::load(&self.inner, filename, &bytes, &bind_group_layout_settings)),
+                shader: parking_lot::Mutex::new(Shader::load(
+                    &self.inner,
+                    filename,
+                    &bytes,
+                    &bind_group_layout_settings,
+                )),
                 version: Default::default(),
             });
 
