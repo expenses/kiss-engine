@@ -28,8 +28,13 @@ pub fn append_canvas(window: &winit::window::Window) {
         .and_then(|win| win.document())
         .and_then(|doc| doc.body())
         .and_then(|body| {
-            body.append_child(&web_sys::Element::from(window.canvas()))
-                .ok()
+            let canvas = window.canvas();
+
+            canvas
+                .style()
+                .set_css_text("display: block; width: 100%; height: 100%");
+
+            body.append_child(&web_sys::Element::from(canvas)).ok()
         })
         .expect("couldn't append canvas to document body");
 }

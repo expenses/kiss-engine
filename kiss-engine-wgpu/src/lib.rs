@@ -38,7 +38,9 @@ fn reflect_bind_group_layout_entries(
 ) -> Vec<wgpu::BindGroupLayoutEntry> {
     let shader_stages = reflect_shader_stages(reflection);
 
-    let descriptor_sets = reflection.get_descriptor_sets().expect("Failed to get descriptor sets for shader reflection");
+    let descriptor_sets = reflection
+        .get_descriptor_sets()
+        .expect("Failed to get descriptor sets for shader reflection");
 
     if descriptor_sets.is_empty() {
         return Vec::new();
@@ -329,7 +331,8 @@ impl Shader {
                 source: wgpu::util::make_spirv(bytes),
             }),
             reflected_bind_group_layout_entries: {
-                let reflection = rspirv_reflect::Reflection::new_from_spirv(bytes).expect("Failed to create reflection from spirv bytes");
+                let reflection = rspirv_reflect::Reflection::new_from_spirv(bytes)
+                    .expect("Failed to create reflection from spirv bytes");
                 reflect_bind_group_layout_entries(&reflection, bind_group_layout_settings)
             },
         }
@@ -439,7 +442,8 @@ impl Device {
 
                     let (tx, rx) = std::sync::mpsc::channel();
 
-                    let mut watcher = notify::raw_watcher(tx).expect("Failed to create a notify watcher");
+                    let mut watcher =
+                        notify::raw_watcher(tx).expect("Failed to create a notify watcher");
 
                     watcher
                         .watch(filename, notify::RecursiveMode::NonRecursive)
