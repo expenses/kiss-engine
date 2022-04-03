@@ -552,6 +552,7 @@ async fn run() {
             perspective_matrix = perspective_matrix_reversed(size.width, size.height);
         }
         event::Event::WindowEvent { event, .. } => match event {
+            #[cfg(not(feature = "wasm"))]
             WindowEvent::KeyboardInput {
                 input:
                     event::KeyboardInput {
