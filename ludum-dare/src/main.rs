@@ -8,6 +8,8 @@ use kiss_engine_wgpu::{BindingResource, Device, RenderPipelineDesc, VertexBuffer
 use rand::Rng;
 use std::ops::*;
 
+mod animation;
+
 use wgpu::util::DeviceExt;
 use winit::{
     event::{self, VirtualKeyCode, WindowEvent},
@@ -70,17 +72,18 @@ fn main() {
     ))
     .expect("Unable to find a suitable GPU adapter!");
 
-    let plane = Model::new(include_bytes!("../plane.glb"), &device, "plane").unwrap();
-    let capsule = Model::new(include_bytes!("../fire_giant.glb"), &device, "capsule").unwrap();
-    let bounce_sphere = Model::new(
+    let (plane, _) = Model::new(include_bytes!("../plane.glb"), &device, "plane").unwrap();
+    let (capsule, mut player_joints) =
+        Model::new(include_bytes!("../fire_giant.glb"), &device, "capsule").unwrap();
+    let (bounce_sphere, _) = Model::new(
         include_bytes!("../bounce_sphere.glb"),
         &device,
         "bounce_sphere",
     )
     .unwrap();
-    let water = Model::new(include_bytes!("../water.glb"), &device, "water").unwrap();
-    let tree = Model::new(include_bytes!("../tree.glb"), &device, "tree").unwrap();
-    let house = Model::new(include_bytes!("../house.glb"), &device, "house").unwrap();
+    let (water, _) = Model::new(include_bytes!("../water.glb"), &device, "water").unwrap();
+    let (tree, _) = Model::new(include_bytes!("../tree.glb"), &device, "tree").unwrap();
+    let (house, _) = Model::new(include_bytes!("../house.glb"), &device, "house").unwrap();
 
     let mut perspective_matrix = perspective_matrix_reversed(size.width, size.height);
 
@@ -98,12 +101,13 @@ fn main() {
     // Prepare glyph_brush
     let font = wgpu_glyph::ab_glyph::FontArc::try_from_slice(include_bytes!(
         "../VonwaonBitmap-16pxLite.ttf"
-    )).unwrap();
+    ))
+    .unwrap();
 
-    let mut glyph_brush = wgpu_glyph::GlyphBrushBuilder::using_font(font)
-        .build(&device, dbg!(config.format));
+    let mut glyph_brush =
+        wgpu_glyph::GlyphBrushBuilder::using_font(font).build(&device, config.format);
 
-        let mut staging_belt = wgpu::util::StagingBelt::new(1024);
+    let mut staging_belt = wgpu::util::StagingBelt::new(1024);
 
     let mut device = Device::new(device);
 
@@ -439,6 +443,17 @@ fn main() {
 
     let mut bounces = 0;
     let mut lost = false;
+    let mut animation_time = 0.0;
+    let mut animation_id = 0;
+
+    let joint_transforms_buffer =
+        device.create_resource(device.inner.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("player joint transforms"),
+            size: (capsule.joint_indices_to_node_indices.len() * std::mem::size_of::<Mat4>())
+                as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        }));
 
     event_loop.run(move |event, _, control_flow| match event {
         event::Event::WindowEvent {
@@ -488,15 +503,9 @@ fn main() {
                     VirtualKeyCode::C if pressed => {
                         orbit.yaw = player_facing;
                     }
-                    VirtualKeyCode::Space if pressed => {
-                        let player_position = Vec3::new(
-                            player_position.x,
-                            heightmap.sample(player_position / 80.0 + 0.5),
-                            player_position.y,
-                        );
-
-                        bounce_sphere_props.scale = 1.0;
-                        bounce_sphere_props.position = player_position + Vec3::Y * 2.0;
+                    VirtualKeyCode::Space if pressed && animation_id != 1 => {
+                        animation_id = 1;
+                        animation_time = 0.0;
                     }
                     _ => {}
                 }
@@ -515,6 +524,11 @@ fn main() {
             let delta_time = 1.0 / 60.0;
 
             if (forwards, right) != (0, 0) {
+                if animation_id == 0 {
+                    animation_id = 2;
+                    animation_time = 0.0;
+                }
+
                 let new_player_facing = current_facing
                     + match (forwards, right) {
                         (0, 1) => 90.0_f32.to_radians(),
@@ -537,6 +551,11 @@ fn main() {
                 player_speed = (player_speed + delta_time).min(1.0);
             } else {
                 player_speed *= 0.9;
+
+                if animation_id == 2 {
+                    animation_id = 0;
+                    animation_time = 0.0;
+                }
             }
 
             let movement = Quat::from_rotation_y(player_facing)
@@ -548,7 +567,7 @@ fn main() {
             player_position.x = player_position.x.max(-40.0).min(40.0);
             player_position.y = player_position.y.max(-40.0).min(40.0);
 
-            let player_position = Vec3::new(
+            let player_position_3d = Vec3::new(
                 player_position.x,
                 heightmap.sample(player_position / 80.0 + 0.5),
                 player_position.y,
@@ -556,15 +575,15 @@ fn main() {
 
             let view_matrix = {
                 Mat4::look_at_rh(
-                    player_position + orbit.as_vector(),
-                    player_position,
+                    player_position_3d + orbit.as_vector(),
+                    player_position_3d,
                     Vec3::Y,
                 )
             };
 
-            bounce_sphere_props.scale += bounce_sphere_props.scale * delta_time;
+            bounce_sphere_props.scale += bounce_sphere_props.scale * delta_time * (2.0 / 3.0);
 
-            if bounce_sphere_props.scale > 3.0 {
+            if bounce_sphere_props.scale > 2.0 {
                 bounce_sphere_props.scale = 0.0;
             }
 
@@ -580,9 +599,6 @@ fn main() {
 
             meteor_props.position += meteor_props.velocity * delta_time;
 
-            let height = heightmap
-                .sample(Vec2::new(meteor_props.position.x, meteor_props.position.z) / 80.0 + 0.5);
-
             if bounce_sphere_props.scale > 0.0
                 && meteor_props.position.distance(bounce_sphere_props.position)
                     < (bounce_sphere_props.scale + 2.0)
@@ -596,9 +612,55 @@ fn main() {
 
                 meteor_props.velocity.x = velocity * rotation.cos();
                 meteor_props.velocity.z = velocity * rotation.sin();
+
+                meteor_props.position += meteor_props.velocity * delta_time;
             } else if meteor_props.position.y < -10.0 {
                 lost = true;
             }
+
+            if animation_id == 1
+                && animation_time > 0.25
+                && animation_time < 0.75
+                && bounce_sphere_props.scale == 0.0
+            {
+                let player_position = Vec3::new(
+                    player_position.x,
+                    heightmap.sample(player_position / 80.0 + 0.5),
+                    player_position.y,
+                );
+
+                bounce_sphere_props.scale = 1.0;
+                bounce_sphere_props.position = player_position + Vec3::Y * 4.0;
+            }
+
+            animation_time += delta_time;
+
+            while animation_time > capsule.animations[animation_id].total_time() {
+                animation_time -= capsule.animations[animation_id].total_time();
+
+                if animation_id == 1 {
+                    animation_id = 0;
+                }
+            }
+
+            capsule.animations[animation_id].animate(
+                &mut player_joints,
+                animation_time,
+                &capsule.depth_first_nodes,
+            );
+
+            let joint_transforms: Vec<_> = player_joints
+                .iter(
+                    &capsule.joint_indices_to_node_indices,
+                    &capsule.inverse_bind_matrices,
+                )
+                .collect();
+
+            queue.write_buffer(
+                &joint_transforms_buffer,
+                0,
+                bytemuck::cast_slice(&joint_transforms),
+            );
 
             queue.write_buffer(
                 &meteor_buffer,
@@ -620,7 +682,7 @@ fn main() {
                 0,
                 bytemuck::bytes_of(&Uniforms {
                     matrices: perspective_matrix * view_matrix,
-                    player_position,
+                    player_position: player_position_3d,
                     player_facing,
                 }),
             );
@@ -749,9 +811,7 @@ fn main() {
                     device
                         .device
                         .get_shader("shaders/compiled/capsule.vert.spv"),
-                    device
-                        .device
-                        .get_shader("shaders/compiled/tree.frag.spv"),
+                    device.device.get_shader("shaders/compiled/tree.frag.spv"),
                     RenderPipelineDesc {
                         ..Default::default()
                     },
@@ -771,6 +831,16 @@ fn main() {
                             format: wgpu::VertexFormat::Float32x2,
                             step_mode: wgpu::VertexStepMode::Vertex,
                         },
+                        VertexBufferLayout {
+                            location: 3,
+                            format: wgpu::VertexFormat::Uint16x4,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                        },
+                        VertexBufferLayout {
+                            location: 4,
+                            format: wgpu::VertexFormat::Float32x4,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                        },
                     ],
                 );
 
@@ -782,6 +852,7 @@ fn main() {
                         BindingResource::Buffer(&meteor_buffer),
                         BindingResource::Sampler(&sampler),
                         BindingResource::Texture(&giant_tex),
+                        BindingResource::Buffer(&joint_transforms_buffer),
                     ],
                 );
 
@@ -791,6 +862,8 @@ fn main() {
                 render_pass.set_vertex_buffer(0, capsule.positions.slice(..));
                 render_pass.set_vertex_buffer(1, capsule.normals.slice(..));
                 render_pass.set_vertex_buffer(2, capsule.uvs.slice(..));
+                render_pass.set_vertex_buffer(3, capsule.joints.slice(..));
+                render_pass.set_vertex_buffer(4, capsule.weights.slice(..));
                 render_pass.set_index_buffer(capsule.indices.slice(..), wgpu::IndexFormat::Uint32);
 
                 render_pass.draw_indexed(0..capsule.num_indices, 0, 0..1);
@@ -1041,7 +1114,6 @@ fn main() {
 
             drop(render_pass);
 
-
             {
                 glyph_brush.queue(wgpu_glyph::Section {
                     screen_position: (16.0, 0.0),
@@ -1064,7 +1136,6 @@ fn main() {
                             h_align: wgpu_glyph::HorizontalAlign::Center,
                             v_align: wgpu_glyph::VerticalAlign::Center,
                         },
-                        ..wgpu_glyph::Section::default()
                     });
                 }
 
@@ -1080,7 +1151,7 @@ fn main() {
                     )
                     .expect("Draw queued");
 
-                    staging_belt.finish();
+                staging_belt.finish();
             }
 
             queue.submit(std::iter::once(encoder.finish()));
@@ -1106,11 +1177,21 @@ struct Model {
     normals: wgpu::Buffer,
     uvs: wgpu::Buffer,
     indices: wgpu::Buffer,
+    joints: wgpu::Buffer,
+    weights: wgpu::Buffer,
     num_indices: u32,
+    depth_first_nodes: Vec<(usize, Option<usize>)>,
+    animations: Vec<animation::Animation>,
+    inverse_bind_matrices: Vec<Mat4>,
+    joint_indices_to_node_indices: Vec<usize>,
 }
 
 impl Model {
-    fn new(bytes: &[u8], device: &wgpu::Device, name: &str) -> anyhow::Result<Self> {
+    fn new(
+        bytes: &[u8],
+        device: &wgpu::Device,
+        name: &str,
+    ) -> anyhow::Result<(Self, animation::AnimationJoints)> {
         let gltf = gltf::Gltf::from_slice(bytes)?;
 
         let buffer_blob = gltf.blob.as_ref().unwrap();
@@ -1121,6 +1202,8 @@ impl Model {
         let mut positions = Vec::new();
         let mut normals = Vec::new();
         let mut uvs = Vec::new();
+        let mut joints = Vec::new();
+        let mut weights = Vec::new();
 
         for (node, mesh) in gltf
             .nodes()
@@ -1161,32 +1244,84 @@ impl Model {
                         .into_f32()
                         .map(Vec2::from),
                 );
+
+                if let Some(read_joints) = reader.read_joints(0) {
+                    joints.extend(read_joints.into_u16());
+                }
+
+                if let Some(read_weights) = reader.read_weights(0) {
+                    weights.extend(read_weights.into_f32());
+                }
             }
         }
 
-        Ok(Self {
-            positions: (device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&format!("{} positions buffer", name)),
-                contents: bytemuck::cast_slice(&positions),
-                usage: wgpu::BufferUsages::VERTEX,
-            })),
-            indices: (device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&format!("{} indices buffer", name)),
-                contents: bytemuck::cast_slice(&indices),
-                usage: wgpu::BufferUsages::INDEX,
-            })),
-            normals: (device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&format!("{} normals buffer", name)),
-                contents: bytemuck::cast_slice(&normals),
-                usage: wgpu::BufferUsages::VERTEX,
-            })),
-            uvs: (device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&format!("{} uvs buffer", name)),
-                contents: bytemuck::cast_slice(&uvs),
-                usage: wgpu::BufferUsages::VERTEX,
-            })),
-            num_indices: indices.len() as u32,
-        })
+        let depth_first_nodes: Vec<_> = node_tree.iter_depth_first().collect();
+        let animations = animation::read_animations(gltf.animations(), buffer_blob, name);
+        let animation_joints = animation::AnimationJoints::new(gltf.nodes(), &depth_first_nodes);
+
+        let skin = gltf.skins().next();
+
+        let joint_indices_to_node_indices: Vec<usize> = if let Some(skin) = skin.as_ref() {
+            skin.joints().map(|node| node.index()).collect()
+        } else {
+            gltf.nodes().map(|node| node.index()).collect()
+        };
+
+        let inverse_bind_matrices: Vec<Mat4> = if let Some(skin) = skin.as_ref() {
+            skin.reader(|buffer| {
+                assert_eq!(buffer.index(), 0);
+                Some(buffer_blob)
+            })
+            .read_inverse_bind_matrices()
+            .ok_or_else(|| anyhow::anyhow!("Missing inverse bind matrices"))?
+            .map(|mat| Mat4::from_cols_array_2d(&mat))
+            .collect()
+        } else {
+            gltf.nodes()
+                .map(|node| node_tree.transform_of(node.index()).as_mat4().inverse())
+                .collect()
+        };
+
+        Ok((
+            Self {
+                positions: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("{} positions buffer", name)),
+                    contents: bytemuck::cast_slice(&positions),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+                indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("{} indices buffer", name)),
+                    contents: bytemuck::cast_slice(&indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                }),
+                normals: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("{} normals buffer", name)),
+                    contents: bytemuck::cast_slice(&normals),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+                uvs: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("{} uvs buffer", name)),
+                    contents: bytemuck::cast_slice(&uvs),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+                joints: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("{} joints buffer", name)),
+                    contents: bytemuck::cast_slice(&joints),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+                weights: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("{} weights buffer", name)),
+                    contents: bytemuck::cast_slice(&weights),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+                num_indices: indices.len() as u32,
+                depth_first_nodes,
+                animations,
+                joint_indices_to_node_indices,
+                inverse_bind_matrices,
+            },
+            animation_joints,
+        ))
     }
 }
 pub struct NodeTree {
@@ -1235,6 +1370,24 @@ impl NodeTree {
 
         transform_sum
     }
+
+    // It turns out that we can just reverse the array to iter through nodes depth first! Useful for applying animations.
+    fn iter_depth_first(&self) -> impl Iterator<Item = (usize, Option<usize>)> + '_ {
+        self.inner
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(index, &(_, parent))| {
+                (
+                    index,
+                    if parent != usize::max_value() {
+                        Some(parent)
+                    } else {
+                        None
+                    },
+                )
+            })
+    }
 }
 
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -1264,7 +1417,7 @@ pub struct MeteorGpuProps {
     pub _padding: u32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Similarity {
     pub translation: Vec3,
@@ -1403,7 +1556,7 @@ fn load_image(
     let image = image::load_from_memory(bytes).unwrap().to_rgba8();
 
     let texture = device.inner.create_texture_with_data(
-        &queue,
+        queue,
         &wgpu::TextureDescriptor {
             label: Some(name),
             size: wgpu::Extent3d {

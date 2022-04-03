@@ -68,6 +68,11 @@ fn reflect_bind_group_layout_entries(
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
+                rspirv_reflect::DescriptorType::STORAGE_BUFFER => wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
                 _ => unimplemented!("{:?}", info.ty),
             },
         })
