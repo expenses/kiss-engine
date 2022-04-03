@@ -3,7 +3,6 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
 };
 
-
 #[cfg(target_arch = "wasm32")]
 use wasm_web_helpers::parse_url_query_string_from_window;
 
@@ -44,28 +43,33 @@ async fn run() {
     let size = window.inner_size();
     let surface = unsafe { instance.create_surface(&window) };
 
-    let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        force_fallback_adapter: false,
-        compatible_surface: None,
-    }).await
-    .expect("No suitable GPU adapters found on the system!");
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        })
+        .await
+        .expect("No suitable GPU adapters found on the system!");
 
     let adapter_info = adapter.get_info();
     log::info!(
         "Using {} with the {:?} backend",
-        adapter_info.name, adapter_info.backend
+        adapter_info.name,
+        adapter_info.backend
     );
 
-    let (device, queue) = adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("device"),
-            features: Default::default(),
-            limits: Default::default(),
-        },
-        None,
-    ).await
-    .expect("Unable to find a suitable GPU adapter!");
+    let (device, queue) = adapter
+        .request_device(
+            &wgpu::DeviceDescriptor {
+                label: Some("device"),
+                features: Default::default(),
+                limits: Default::default(),
+            },
+            None,
+        )
+        .await
+        .expect("Unable to find a suitable GPU adapter!");
 
     let mut config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -78,12 +82,13 @@ async fn run() {
 
     let mut device = kiss_engine_wgpu::Device::new(device);
 
-    let uniform_buffer = device.create_resource(device.inner.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("uniform buffer"),
-        size: 4,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    }));
+    let uniform_buffer =
+        device.create_resource(device.inner.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("uniform buffer"),
+            size: 4,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
 
     let mut time: f32 = 0.0;
 
@@ -185,19 +190,20 @@ async fn run() {
             });
 
             {
-                let device = device.with_formats(config.format, Some(wgpu::TextureFormat::Depth32Float));
+                let device =
+                    device.with_formats(config.format, Some(wgpu::TextureFormat::Depth32Float));
 
                 let pipeline = device.get_pipeline(
                     "blit pipeline",
                     device.device.get_shader(
                         "vert.hlsl.spv",
                         #[cfg(target_arch = "wasm32")]
-                        include_bytes!("../vert.hlsl.spv")
+                        include_bytes!("../vert.hlsl.spv"),
                     ),
                     device.device.get_shader(
                         "frag.hlsl.spv",
                         #[cfg(target_arch = "wasm32")]
-                        include_bytes!("../frag.hlsl.spv")
+                        include_bytes!("../frag.hlsl.spv"),
                     ),
                     RenderPipelineDesc {
                         depth_compare: wgpu::CompareFunction::Always,
@@ -206,7 +212,11 @@ async fn run() {
                     &[],
                 );
 
-                let bind_group = device.get_bind_group("blit bind group", pipeline, &[kiss_engine_wgpu::BindingResource::Buffer(&uniform_buffer)]);
+                let bind_group = device.get_bind_group(
+                    "blit bind group",
+                    pipeline,
+                    &[kiss_engine_wgpu::BindingResource::Buffer(&uniform_buffer)],
+                );
 
                 render_pass.set_pipeline(&pipeline.pipeline);
                 render_pass.set_bind_group(0, bind_group, &[]);

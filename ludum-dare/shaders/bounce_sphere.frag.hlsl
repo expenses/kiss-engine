@@ -7,8 +7,7 @@ struct In {
 
 
 struct Out {
-        [[vk::location(0)]] float4 color: TEXCOORD0;
-
+    [[vk::location(0)]] float4 color: TEXCOORD0;
 };
 
 Out main(In input) {

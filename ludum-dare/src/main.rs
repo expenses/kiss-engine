@@ -3,6 +3,7 @@ use glam::Mat4;
 use glam::Quat;
 use glam::Vec2;
 use glam::Vec3;
+use glam::Vec4;
 use kiss_engine_wgpu::{BindingResource, Device, RenderPipelineDesc, VertexBufferLayout};
 use rand::Rng;
 use std::ops::*;
@@ -78,6 +79,8 @@ fn main() {
     )
     .unwrap();
     let water = Model::new(include_bytes!("../water.glb"), &device, "water").unwrap();
+    let tree = Model::new(include_bytes!("../tree.glb"), &device, "tree").unwrap();
+    let house = Model::new(include_bytes!("../house.glb"), &device, "house").unwrap();
 
     let mut perspective_matrix = perspective_matrix_reversed(size.width, size.height);
 
@@ -286,15 +289,136 @@ fn main() {
         }
     };
 
+    let forest_map = {
+        let image = image::load_from_memory(include_bytes!("../forestmap.png"))
+            .unwrap()
+            .to_rgb32f();
+
+        HeightMap {
+            floats: image.pixels().map(|pixel| pixel.0[0]).collect(),
+            height: image.height(),
+            width: image.height(),
+        }
+    };
+
+    let mut forest_points = Vec::new();
+
+    while forest_points.len() < 1000 {
+        let x = rng.gen_range(0.0..1.0);
+        let y = rng.gen_range(0.0..1.0);
+
+        let value = rng.gen_range(0.0..1.0);
+
+        let heightmap_pos = heightmap.sample(Vec2::new(x, y));
+
+        if forest_map.sample(Vec2::new(x, y)) > value && heightmap_pos < 4.5 && heightmap_pos > 0.25
+        {
+            forest_points.push(Vec4::new(
+                (x - 0.5) * 80.0,
+                heightmap_pos,
+                (y - 0.5) * 80.0,
+                rng.gen_range(0.6..0.8),
+            ));
+        }
+    }
+
+    let mut house_points = Vec::new();
+
+    while house_points.len() < 50 {
+        let x = rng.gen_range(0.0..1.0);
+        let y = rng.gen_range(0.0..1.0);
+
+        let value = rng.gen_range(0.0..1.0);
+
+        let heightmap_pos = heightmap.sample(Vec2::new(x, y));
+
+        if forest_map.sample(Vec2::new(x, y)) < value && heightmap_pos < 4.5 && heightmap_pos > 0.25
+        {
+            house_points.push(Vec4::new(
+                (x - 0.5) * 80.0,
+                heightmap_pos,
+                (y - 0.5) * 80.0,
+                rng.gen_range(0.0..std::f32::consts::TAU),
+            ));
+        }
+    }
+
+    let num_forest_points = forest_points.len() as u32;
+    let num_house_points = house_points.len() as u32;
+
+    let forest_points = device.create_resource(device.inner.create_buffer_init(
+        &wgpu::util::BufferInitDescriptor {
+            label: Some("forest buffer"),
+            contents: bytemuck::cast_slice(&forest_points),
+            usage: wgpu::BufferUsages::VERTEX,
+        },
+    ));
+
+    let house_points = device.create_resource(device.inner.create_buffer_init(
+        &wgpu::util::BufferInitDescriptor {
+            label: Some("house buffer"),
+            contents: bytemuck::cast_slice(&house_points),
+            usage: wgpu::BufferUsages::VERTEX,
+        },
+    ));
+
     target_buffer.unmap();
 
     drop(target_buffer);
 
-    let _sampler = device.create_resource(device.inner.create_sampler(&wgpu::SamplerDescriptor {
+    let grass_texture = load_image(
+        &device,
+        &queue,
+        include_bytes!("../grass.png"),
+        "grass texture",
+    );
+    let sand_texture = load_image(
+        &device,
+        &queue,
+        include_bytes!("../sand.png"),
+        "sand texture",
+    );
+    let rock_texture = load_image(
+        &device,
+        &queue,
+        include_bytes!("../rock.png"),
+        "rock texture",
+    );
+    let forest_texture = load_image(
+        &device,
+        &queue,
+        include_bytes!("../grass_forest.png"),
+        "forest texture",
+    );
+    let house_texture = load_image(
+        &device,
+        &queue,
+        include_bytes!("../house.png"),
+        "house texture",
+    );
+
+    let forest_map_tex = load_image(
+        &device,
+        &queue,
+        include_bytes!("../forestmap.png"),
+        "forest map texture",
+    );
+
+    let sampler = device.create_resource(device.inner.create_sampler(&wgpu::SamplerDescriptor {
         address_mode_u: wgpu::AddressMode::Repeat,
         address_mode_v: wgpu::AddressMode::Repeat,
         ..Default::default()
     }));
+
+    let linear_sampler =
+        device.create_resource(device.inner.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        }));
 
     event_loop.run(move |event, _, control_flow| match event {
         event::Event::WindowEvent {
@@ -358,6 +482,9 @@ fn main() {
                     }
                     _ => {}
                 }
+            }
+            WindowEvent::Focused(false) => {
+                kbd = Default::default();
             }
             _ => {}
         },
@@ -571,14 +698,19 @@ fn main() {
                     ],
                 );
 
-                let _height_map = device.device.try_get_cached_texture("height map").unwrap();
-
                 let bind_group = device.get_bind_group(
                     "plane bind group",
                     pipeline,
                     &[
                         BindingResource::Buffer(&uniform_buffer),
                         BindingResource::Buffer(&meteor_buffer),
+                        BindingResource::Sampler(&sampler),
+                        BindingResource::Sampler(&linear_sampler),
+                        BindingResource::Texture(&grass_texture),
+                        BindingResource::Texture(&sand_texture),
+                        BindingResource::Texture(&rock_texture),
+                        BindingResource::Texture(&forest_texture),
+                        BindingResource::Texture(&forest_map_tex),
                     ],
                 );
 
@@ -621,7 +753,10 @@ fn main() {
                 let bind_group = device.get_bind_group(
                     "capsule bind group",
                     pipeline,
-                    &[BindingResource::Buffer(&uniform_buffer)],
+                    &[
+                        BindingResource::Buffer(&uniform_buffer),
+                        BindingResource::Buffer(&meteor_buffer),
+                    ],
                 );
 
                 render_pass.set_pipeline(&pipeline.pipeline);
@@ -674,6 +809,117 @@ fn main() {
                     .set_index_buffer(bounce_sphere.indices.slice(..), wgpu::IndexFormat::Uint32);
 
                 render_pass.draw_indexed(0..bounce_sphere.num_indices, 0, 0..1);
+
+                {
+                    let pipeline = device.get_pipeline(
+                        "trees pipeline",
+                        device.device.get_shader("shaders/compiled/tree.vert.spv"),
+                        device.device.get_shader("shaders/compiled/tree.frag.spv"),
+                        RenderPipelineDesc {
+                            ..Default::default()
+                        },
+                        &[
+                            VertexBufferLayout {
+                                location: 0,
+                                format: wgpu::VertexFormat::Float32x3,
+                                step_mode: wgpu::VertexStepMode::Vertex,
+                            },
+                            VertexBufferLayout {
+                                location: 1,
+                                format: wgpu::VertexFormat::Float32x3,
+                                step_mode: wgpu::VertexStepMode::Vertex,
+                            },
+                            VertexBufferLayout {
+                                location: 2,
+                                format: wgpu::VertexFormat::Float32x2,
+                                step_mode: wgpu::VertexStepMode::Vertex,
+                            },
+                            VertexBufferLayout {
+                                location: 3,
+                                format: wgpu::VertexFormat::Float32x4,
+                                step_mode: wgpu::VertexStepMode::Instance,
+                            },
+                        ],
+                    );
+
+                    let bind_group = device.get_bind_group(
+                        "trees bind group",
+                        pipeline,
+                        &[
+                            BindingResource::Buffer(&uniform_buffer),
+                            BindingResource::Buffer(&meteor_buffer),
+                            BindingResource::Sampler(&sampler),
+                            BindingResource::Texture(&forest_texture),
+                        ],
+                    );
+
+                    render_pass.set_pipeline(&pipeline.pipeline);
+                    render_pass.set_bind_group(0, bind_group, &[]);
+
+                    render_pass.set_vertex_buffer(0, tree.positions.slice(..));
+                    render_pass.set_vertex_buffer(1, tree.normals.slice(..));
+                    render_pass.set_vertex_buffer(2, tree.uvs.slice(..));
+                    render_pass.set_vertex_buffer(3, forest_points.slice(..));
+                    render_pass.set_index_buffer(tree.indices.slice(..), wgpu::IndexFormat::Uint32);
+
+                    render_pass.draw_indexed(0..tree.num_indices, 0, 0..num_forest_points);
+                }
+
+                {
+                    let pipeline = device.get_pipeline(
+                        "house pipeline",
+                        device.device.get_shader("shaders/compiled/house.vert.spv"),
+                        device.device.get_shader("shaders/compiled/tree.frag.spv"),
+                        RenderPipelineDesc {
+                            ..Default::default()
+                        },
+                        &[
+                            VertexBufferLayout {
+                                location: 0,
+                                format: wgpu::VertexFormat::Float32x3,
+                                step_mode: wgpu::VertexStepMode::Vertex,
+                            },
+                            VertexBufferLayout {
+                                location: 1,
+                                format: wgpu::VertexFormat::Float32x3,
+                                step_mode: wgpu::VertexStepMode::Vertex,
+                            },
+                            VertexBufferLayout {
+                                location: 2,
+                                format: wgpu::VertexFormat::Float32x2,
+                                step_mode: wgpu::VertexStepMode::Vertex,
+                            },
+                            VertexBufferLayout {
+                                location: 3,
+                                format: wgpu::VertexFormat::Float32x4,
+                                step_mode: wgpu::VertexStepMode::Instance,
+                            },
+                        ],
+                    );
+
+                    let bind_group = device.get_bind_group(
+                        "house bind group",
+                        pipeline,
+                        &[
+                            BindingResource::Buffer(&uniform_buffer),
+                            BindingResource::Buffer(&meteor_buffer),
+                            BindingResource::Sampler(&sampler),
+                            BindingResource::Texture(&house_texture),
+                        ],
+                    );
+
+                    render_pass.set_pipeline(&pipeline.pipeline);
+                    render_pass.set_bind_group(0, bind_group, &[]);
+
+                    render_pass.set_vertex_buffer(0, house.positions.slice(..));
+                    render_pass.set_vertex_buffer(1, house.normals.slice(..));
+                    render_pass.set_vertex_buffer(2, house.uvs.slice(..));
+                    render_pass.set_vertex_buffer(3, house_points.slice(..));
+                    render_pass
+                        .set_index_buffer(house.indices.slice(..), wgpu::IndexFormat::Uint32);
+
+                    render_pass.draw_indexed(0..house.num_indices, 0, 0..num_house_points);
+                }
 
                 let pipeline = device.get_pipeline(
                     "water pipeline",
@@ -1080,4 +1326,35 @@ impl HeightMap {
 
         self.floats[pos]
     }
+}
+fn load_image(
+    device: &Device,
+    queue: &wgpu::Queue,
+    bytes: &[u8],
+    name: &str,
+) -> kiss_engine_wgpu::Resource<kiss_engine_wgpu::TextureInner> {
+    let image = image::load_from_memory(bytes).unwrap().to_rgba8();
+
+    let texture = device.inner.create_texture_with_data(
+        &queue,
+        &wgpu::TextureDescriptor {
+            label: Some(name),
+            size: wgpu::Extent3d {
+                width: image.width(),
+                height: image.height(),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        },
+        &*image,
+    );
+
+    device.create_resource(kiss_engine_wgpu::TextureInner {
+        view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
+        texture,
+    })
 }

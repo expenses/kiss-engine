@@ -17,3 +17,4 @@ gltf = { version = "1.0.0" }
 glam = { version = "0.20.3", features = ["bytemuck"] }
 anyhow = "1.0.56"
 rand = "0.8.5"
+image = { version = "0.24.1", default-features = false, features = ["png"] }

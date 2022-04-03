@@ -13,3 +13,8 @@ glslc -g -fshader-stage=frag shaders/bounce_sphere.frag.hlsl -o   shaders/compil
 glslc -g -fshader-stage=frag shaders/water.frag.hlsl -o   shaders/compiled/water.frag.spv
 
 glslc -g -fshader-stage=vert shaders/meteor.vert.hlsl -o   shaders/compiled/meteor.vert.spv
+
+glslc -g -fshader-stage=vert shaders/tree.vert.hlsl -o   shaders/compiled/tree.vert.spv
+glslc -g -fshader-stage=frag shaders/tree.frag.hlsl -o   shaders/compiled/tree.frag.spv
+
+glslc -g -fshader-stage=vert shaders/house.vert.hlsl -o   shaders/compiled/house.vert.spv

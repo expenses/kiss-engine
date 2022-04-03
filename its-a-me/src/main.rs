@@ -1,7 +1,7 @@
 mod level;
 
 use kiss_engine_wgpu::{
-    BindingResource, Device, RenderPipelineDesc, Resource, VertexBufferLayout, DeviceWithFormats,
+    BindingResource, Device, DeviceWithFormats, RenderPipelineDesc, Resource, VertexBufferLayout,
 };
 
 use wgpu::util::DeviceExt;
@@ -465,7 +465,8 @@ fn main() {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba16Float,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
                 label: Some("hdr texture"),
             });
 
@@ -509,7 +510,10 @@ fn main() {
             });
 
             {
-                let device = device.with_formats(wgpu::TextureFormat::Rgba16Float, Some(wgpu::TextureFormat::Depth32Float));
+                let device = device.with_formats(
+                    wgpu::TextureFormat::Rgba16Float,
+                    Some(wgpu::TextureFormat::Depth32Float),
+                );
 
                 render_mario(
                     &device,
@@ -521,9 +525,21 @@ fn main() {
                     wireframe,
                 );
 
-                render_grass(&device, &mut render_pass, &uniform_buffer, &grass, num_points);
+                render_grass(
+                    &device,
+                    &mut render_pass,
+                    &uniform_buffer,
+                    &grass,
+                    num_points,
+                );
 
-                render_world(&device, &mut render_pass, &uniform_buffer, &buffer, &normal_buffer);
+                render_world(
+                    &device,
+                    &mut render_pass,
+                    &uniform_buffer,
+                    &buffer,
+                    &normal_buffer,
+                );
             }
 
             drop(render_pass);
@@ -556,10 +572,14 @@ fn main() {
                     RenderPipelineDesc::default(),
                     &[],
                 );
-                let bind_group = device.get_bind_group("blit bind group", pipeline, &[
-                    BindingResource::Sampler(&sampler),
-                    BindingResource::Texture(&hdr_texture),
-                ]);
+                let bind_group = device.get_bind_group(
+                    "blit bind group",
+                    pipeline,
+                    &[
+                        BindingResource::Sampler(&sampler),
+                        BindingResource::Texture(&hdr_texture),
+                    ],
+                );
 
                 render_pass.set_pipeline(&pipeline.pipeline);
                 render_pass.set_bind_group(0, bind_group, &[]);
@@ -780,14 +800,10 @@ fn render_mario<'a>(
         render_pass.set_bind_group(0, bind_group, &[]);
     }
 
-    render_pass
-        .set_vertex_buffer(0, mario_buffers.position.buffer.slice(..));
-    render_pass
-        .set_vertex_buffer(1, mario_buffers.uv.buffer.slice(..));
-    render_pass
-        .set_vertex_buffer(2, mario_buffers.colour.buffer.slice(..));
-    render_pass
-        .set_vertex_buffer(3, mario_buffers.normal.buffer.slice(..));
+    render_pass.set_vertex_buffer(0, mario_buffers.position.buffer.slice(..));
+    render_pass.set_vertex_buffer(1, mario_buffers.uv.buffer.slice(..));
+    render_pass.set_vertex_buffer(2, mario_buffers.colour.buffer.slice(..));
+    render_pass.set_vertex_buffer(3, mario_buffers.normal.buffer.slice(..));
     render_pass.draw(
         0..mario_buffers.position.len / std::mem::size_of::<glam::Vec3>() as u32,
         0..1,
@@ -820,16 +836,17 @@ fn render_world<'a>(
         ],
     );
 
-    let bind_group = device.get_bind_group("world bind group", pipeline,         &[BindingResource::Buffer(uniform_buffer)],
-);
-
+    let bind_group = device.get_bind_group(
+        "world bind group",
+        pipeline,
+        &[BindingResource::Buffer(uniform_buffer)],
+    );
 
     render_pass.set_pipeline(&pipeline.pipeline);
     render_pass.set_bind_group(0, bind_group, &[]);
     render_pass.set_vertex_buffer(0, buffer.slice(..));
     render_pass.set_vertex_buffer(1, normal_buffer.slice(..));
-    render_pass
-        .draw(0..level::POINTS.len() as u32 * 3, 0..1);
+    render_pass.draw(0..level::POINTS.len() as u32 * 3, 0..1);
 }
 
 fn render_grass<'a>(
@@ -857,7 +874,11 @@ fn render_grass<'a>(
         }],
     );
 
-    let bind_group = device.get_bind_group("grass bind group",  pipeline,       &[BindingResource::Buffer(uniform_buffer)]);
+    let bind_group = device.get_bind_group(
+        "grass bind group",
+        pipeline,
+        &[BindingResource::Buffer(uniform_buffer)],
+    );
 
     render_pass.set_pipeline(&pipeline.pipeline);
     render_pass.set_bind_group(0, bind_group, &[]);

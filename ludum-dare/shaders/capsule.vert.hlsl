@@ -4,9 +4,6 @@
     float player_facing;
 };
 
-[[vk::binding(1)]] Texture2D<float> depth_map_tex;
-[[vk::binding(2)]] sampler tex_sampler;
-
 struct In {
     [[vk::location(0)]] float3 pos: TEXCOORD0;
     [[vk::location(1)]] float3 normal: TEXCOORD1;
@@ -16,6 +13,7 @@ struct Out {
     float4 position: SV_Position;
     [[vk::location(0)]] float2 uv: TEXCOORD0;
     [[vk::location(1)]] float3 normal: TEXCOORD1;
+    [[vk::location(2)]] float3 position2: TEXCOORD1;
 };
 
 
@@ -41,6 +39,7 @@ Out main(In input) {
     output.position = (matrices) * float4(p + (rot * input.pos), 1.0);
     output.uv = float2(input.pos.x, input.pos.z);
     output.normal = rot * input.normal;
+    output.position2 = p + (rot * input.pos);
 
     return output;
 }

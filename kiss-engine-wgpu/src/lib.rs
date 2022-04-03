@@ -61,10 +61,10 @@ fn reflect_bind_group_layout_entries(
                     min_binding_size: None,
                 },
                 rspirv_reflect::DescriptorType::SAMPLER => {
-                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering)
+                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)
                 }
                 rspirv_reflect::DescriptorType::SAMPLED_IMAGE => wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
@@ -190,7 +190,7 @@ fn create_render_pipeline(
             targets: &[wgpu::ColorTargetState {
                 format: attachment_texture_format,
                 blend: render_pipeline_desc.blend,
-                write_mask:wgpu::ColorWrites::ALL,
+                write_mask: wgpu::ColorWrites::ALL,
             }],
         }),
         primitive: render_pipeline_desc.primitive,
@@ -512,7 +512,11 @@ impl Device {
         self.textures.flush("textures");
     }
 
-    pub fn with_formats(&self, attachment_texture_format: wgpu::TextureFormat, depth_stencil_attachment_format: Option<wgpu::TextureFormat>) -> DeviceWithFormats {
+    pub fn with_formats(
+        &self,
+        attachment_texture_format: wgpu::TextureFormat,
+        depth_stencil_attachment_format: Option<wgpu::TextureFormat>,
+    ) -> DeviceWithFormats {
         DeviceWithFormats {
             device: self,
             attachment_texture_format,
@@ -520,21 +524,22 @@ impl Device {
         }
     }
 
-    pub fn get_texture(&self, descriptor: &wgpu::TextureDescriptor<'static>) -> &Resource<TextureInner> {
+    pub fn get_texture(
+        &self,
+        descriptor: &wgpu::TextureDescriptor<'static>,
+    ) -> &Resource<TextureInner> {
         let name = descriptor.label.unwrap();
 
-        let create_texture_fn = || {
-            Texture {
-                texture: self.create_resource({
-                    let texture = self.inner.create_texture(descriptor);
+        let create_texture_fn = || Texture {
+            texture: self.create_resource({
+                let texture = self.inner.create_texture(descriptor);
 
-                    TextureInner {
-                        view: texture.create_view(&Default::default()),
-                        texture,
-                    }
-                }),
-                extent: descriptor.size,
-            }
+                TextureInner {
+                    view: texture.create_view(&Default::default()),
+                    texture,
+                }
+            }),
+            extent: descriptor.size,
         };
 
         let texture = self.textures.get_or_insert_with(name, create_texture_fn);
@@ -560,11 +565,14 @@ pub struct DeviceWithFormats<'a> {
 }
 
 impl<'a> DeviceWithFormats<'a> {
-    pub fn get_pipeline(&self, name: &'static str,
-    vertex_shader: &ReloadableShader,
-    fragment_shader: &ReloadableShader,
-    render_pipeline_desc: RenderPipelineDesc,
-    buffer_layout: &[VertexBufferLayout]) -> &'a RenderPipeline {
+    pub fn get_pipeline(
+        &self,
+        name: &'static str,
+        vertex_shader: &ReloadableShader,
+        fragment_shader: &ReloadableShader,
+        render_pipeline_desc: RenderPipelineDesc,
+        buffer_layout: &[VertexBufferLayout],
+    ) -> &'a RenderPipeline {
         self.device.get_pipeline(
             name,
             vertex_shader,
@@ -576,7 +584,12 @@ impl<'a> DeviceWithFormats<'a> {
         )
     }
 
-    pub fn get_bind_group(&self, name: &'static str, pipeline: &RenderPipeline, binding_resources: &[BindingResource]) -> &'a wgpu::BindGroup {
+    pub fn get_bind_group(
+        &self,
+        name: &'static str,
+        pipeline: &RenderPipeline,
+        binding_resources: &[BindingResource],
+    ) -> &'a wgpu::BindGroup {
         let ids: Vec<_> = binding_resources
             .iter()
             .map(|resource| resource.id())
