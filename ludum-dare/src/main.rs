@@ -11,6 +11,9 @@ use rand::Rng;
 use std::ops::*;
 
 mod animation;
+mod assets;
+
+use assets::{load_image, Model};
 
 use wgpu::util::DeviceExt;
 use winit::{
@@ -20,6 +23,47 @@ use winit::{
 
 pub const Z_NEAR: f32 = 0.01;
 pub const Z_FAR: f32 = 50_000.0;
+
+const BASIC_FORMAT: &[VertexBufferLayout] = &[
+    VertexBufferLayout {
+        location: 0,
+        format: wgpu::VertexFormat::Float32x3,
+        step_mode: wgpu::VertexStepMode::Vertex,
+    },
+    VertexBufferLayout {
+        location: 1,
+        format: wgpu::VertexFormat::Float32x3,
+        step_mode: wgpu::VertexStepMode::Vertex,
+    },
+    VertexBufferLayout {
+        location: 2,
+        format: wgpu::VertexFormat::Float32x2,
+        step_mode: wgpu::VertexStepMode::Vertex,
+    },
+];
+
+const INSTANCED_FORMAT: &[VertexBufferLayout] = &[
+    VertexBufferLayout {
+        location: 0,
+        format: wgpu::VertexFormat::Float32x3,
+        step_mode: wgpu::VertexStepMode::Vertex,
+    },
+    VertexBufferLayout {
+        location: 1,
+        format: wgpu::VertexFormat::Float32x3,
+        step_mode: wgpu::VertexStepMode::Vertex,
+    },
+    VertexBufferLayout {
+        location: 2,
+        format: wgpu::VertexFormat::Float32x2,
+        step_mode: wgpu::VertexStepMode::Vertex,
+    },
+    VertexBufferLayout {
+        location: 3,
+        format: wgpu::VertexFormat::Float32x4,
+        step_mode: wgpu::VertexStepMode::Instance,
+    },
+];
 
 fn perspective_matrix_reversed(width: u32, height: u32) -> glam::Mat4 {
     let aspect_ratio = width as f32 / height as f32;
@@ -54,9 +98,10 @@ async fn run() {
     env_logger::init();
 
     let event_loop = EventLoop::new();
-    let builder = winit::window::WindowBuilder::new();
 
-    let window = builder.build(&event_loop).unwrap();
+    let window = winit::window::WindowBuilder::new()
+        .build(&event_loop)
+        .expect("Failed to create window");
 
     #[cfg(feature = "wasm")]
     {
@@ -89,27 +134,29 @@ async fn run() {
             &wgpu::DeviceDescriptor {
                 label: Some("device"),
                 features: Default::default(),
+                #[cfg(feature = "wasm")]
                 limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                #[cfg(not(feature = "wasm"))]
+                limits: Default::default(),
             },
             None,
         )
         .await
         .expect("Unable to find a suitable GPU adapter!");
 
-    let (plane, _) = Model::new(include_bytes!("../plane.glb"), &device, "plane").unwrap();
+    let (plane, _) = Model::new(include_bytes!("../plane.glb"), &device, "plane");
     let (capsule, mut player_joints) =
-        Model::new(include_bytes!("../fire_giant.glb"), &device, "capsule").unwrap();
+        Model::new(include_bytes!("../fire_giant.glb"), &device, "capsule");
     let (bounce_sphere, _) = Model::new(
         include_bytes!("../bounce_sphere.glb"),
         &device,
         "bounce_sphere",
-    )
-    .unwrap();
-    let (water, _) = Model::new(include_bytes!("../water.glb"), &device, "water").unwrap();
-    let (tree, _) = Model::new(include_bytes!("../tree.glb"), &device, "tree").unwrap();
-    let (house, _) = Model::new(include_bytes!("../house.glb"), &device, "house").unwrap();
+    );
+    let (water, _) = Model::new(include_bytes!("../water.glb"), &device, "water");
+    let (tree, _) = Model::new(include_bytes!("../tree.glb"), &device, "tree");
+    let (house, _) = Model::new(include_bytes!("../house.glb"), &device, "house");
 
-    let (meteor, _) = Model::new(include_bytes!("../meteor.glb"), &device, "meteor").unwrap();
+    let (meteor, _) = Model::new(include_bytes!("../meteor.glb"), &device, "meteor");
 
     let mut perspective_matrix = perspective_matrix_reversed(size.width, size.height);
 
@@ -117,7 +164,9 @@ async fn run() {
 
     let mut config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format: surface.get_preferred_format(&adapter).unwrap(),
+        format: surface
+            .get_preferred_format(&adapter)
+            .expect("Failed to get preferred surface format"),
         width: size.width,
         height: size.height,
         present_mode: wgpu::PresentMode::Fifo,
@@ -128,7 +177,7 @@ async fn run() {
     let font = wgpu_glyph::ab_glyph::FontArc::try_from_slice(include_bytes!(
         "../VonwaonBitmap-16pxLite.ttf"
     ))
-    .unwrap();
+    .expect("Failed to load font");
 
     let mut glyph_brush = wgpu_glyph::GlyphBrushBuilder::using_font(font)
         .initial_cache_size((512, 512))
@@ -277,30 +326,15 @@ async fn run() {
                 primitive: wgpu::PrimitiveState::default(),
                 ..Default::default()
             },
-            &[
-                VertexBufferLayout {
-                    location: 0,
-                    format: wgpu::VertexFormat::Float32x3,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                },
-                VertexBufferLayout {
-                    location: 1,
-                    format: wgpu::VertexFormat::Float32x2,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                },
-            ],
+            BASIC_FORMAT,
         );
 
-        let bind_group = device.get_bind_group("bake height map bind group", pipeline, &[]);
+        let bind_group = device.get_bind_group("bake height map", pipeline, &[]);
 
         render_pass.set_pipeline(&pipeline.pipeline);
         render_pass.set_bind_group(0, bind_group, &[]);
 
-        render_pass.set_vertex_buffer(0, plane.positions.slice(..));
-        render_pass.set_vertex_buffer(1, plane.uvs.slice(..));
-        render_pass.set_index_buffer(plane.indices.slice(..), wgpu::IndexFormat::Uint32);
-
-        render_pass.draw_indexed(0..plane.num_indices, 0, 0..1);
+        plane.render(&mut render_pass, 1);
 
         drop(render_pass);
 
@@ -314,7 +348,9 @@ async fn run() {
             wgpu::ImageCopyBuffer {
                 buffer: &target_buffer,
                 layout: wgpu::ImageDataLayout {
-                    bytes_per_row: Some(std::num::NonZeroU32::new(1024 * 4 * 4).unwrap()),
+                    bytes_per_row: Some(
+                        std::num::NonZeroU32::new(1024 * 4 * 4).expect("unreachable"),
+                    ),
                     ..Default::default()
                 },
             },
@@ -337,7 +373,7 @@ async fn run() {
 
         device.inner.poll(wgpu::Maintain::Wait);
 
-        map_future.await.unwrap();
+        map_future.await.expect("Mapping height map slice failed");
 
         let bytes = slice.get_mapped_range();
 
@@ -356,7 +392,7 @@ async fn run() {
 
     let forest_map = {
         let image = image::load_from_memory(include_bytes!("../forestmap.png"))
-            .unwrap()
+            .expect("Failed to read image")
             .to_rgb32f();
 
         HeightMap {
@@ -675,8 +711,10 @@ async fn run() {
 
                 meteor_props.velocity.x = velocity * rotation.cos();
                 meteor_props.velocity.z = velocity * rotation.sin();
-            } else if meteor_props.position.y < -10.0 {
+            } else if meteor_props.position.y < 0.0 {
                 lost = true;
+
+                meteor_props.position.y -= 100.0;
             }
 
             if animation_id == 1
@@ -875,27 +913,11 @@ async fn run() {
                     RenderPipelineDesc {
                         ..Default::default()
                     },
-                    &[
-                        VertexBufferLayout {
-                            location: 0,
-                            format: wgpu::VertexFormat::Float32x3,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                        },
-                        VertexBufferLayout {
-                            location: 1,
-                            format: wgpu::VertexFormat::Float32x3,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                        },
-                        VertexBufferLayout {
-                            location: 2,
-                            format: wgpu::VertexFormat::Float32x2,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                        },
-                    ],
+                    BASIC_FORMAT,
                 );
 
                 let bind_group = device.get_bind_group(
-                    "plane bind group",
+                    "plane",
                     pipeline,
                     &[
                         BindingResource::Buffer(&uniform_buffer),
@@ -913,13 +935,7 @@ async fn run() {
                 render_pass.set_pipeline(&pipeline.pipeline);
                 render_pass.set_bind_group(0, bind_group, &[]);
 
-                render_pass.set_vertex_buffer(0, plane.positions.slice(..));
-                render_pass.set_vertex_buffer(1, plane.normals.slice(..));
-
-                render_pass.set_vertex_buffer(2, plane.uvs.slice(..));
-                render_pass.set_index_buffer(plane.indices.slice(..), wgpu::IndexFormat::Uint32);
-
-                render_pass.draw_indexed(0..plane.num_indices, 0, 0..1);
+                plane.render(&mut render_pass, 1);
 
                 let pipeline = device.get_pipeline(
                     "player pipeline",
@@ -968,7 +984,7 @@ async fn run() {
                 );
 
                 let bind_group = device.get_bind_group(
-                    "capsule bind group",
+                    "capsule",
                     pipeline,
                     &[
                         BindingResource::Buffer(&uniform_buffer),
@@ -982,14 +998,9 @@ async fn run() {
                 render_pass.set_pipeline(&pipeline.pipeline);
                 render_pass.set_bind_group(0, bind_group, &[]);
 
-                render_pass.set_vertex_buffer(0, capsule.positions.slice(..));
-                render_pass.set_vertex_buffer(1, capsule.normals.slice(..));
-                render_pass.set_vertex_buffer(2, capsule.uvs.slice(..));
                 render_pass.set_vertex_buffer(3, capsule.joints.slice(..));
                 render_pass.set_vertex_buffer(4, capsule.weights.slice(..));
-                render_pass.set_index_buffer(capsule.indices.slice(..), wgpu::IndexFormat::Uint32);
-
-                render_pass.draw_indexed(0..capsule.num_indices, 0, 0..1);
+                capsule.render(&mut render_pass, 1);
 
                 let pipeline = device.get_pipeline(
                     "meteor pipeline",
@@ -1008,27 +1019,11 @@ async fn run() {
                     RenderPipelineDesc {
                         ..Default::default()
                     },
-                    &[
-                        VertexBufferLayout {
-                            location: 0,
-                            format: wgpu::VertexFormat::Float32x3,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                        },
-                        VertexBufferLayout {
-                            location: 1,
-                            format: wgpu::VertexFormat::Float32x3,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                        },
-                        VertexBufferLayout {
-                            location: 2,
-                            format: wgpu::VertexFormat::Float32x2,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                        },
-                    ],
+                    BASIC_FORMAT,
                 );
 
                 let bind_group = device.get_bind_group(
-                    "meteor bind group",
+                    "meteor",
                     pipeline,
                     &[
                         BindingResource::Buffer(&uniform_buffer),
@@ -1041,12 +1036,7 @@ async fn run() {
                 render_pass.set_pipeline(&pipeline.pipeline);
                 render_pass.set_bind_group(0, bind_group, &[]);
 
-                render_pass.set_vertex_buffer(0, meteor.positions.slice(..));
-                render_pass.set_vertex_buffer(1, meteor.normals.slice(..));
-                render_pass.set_vertex_buffer(2, meteor.uvs.slice(..));
-                render_pass.set_index_buffer(meteor.indices.slice(..), wgpu::IndexFormat::Uint32);
-
-                render_pass.draw_indexed(0..meteor.num_indices, 0, 0..1);
+                meteor.render(&mut render_pass, 1);
 
                 {
                     let pipeline = device.get_pipeline(
@@ -1066,32 +1056,11 @@ async fn run() {
                         RenderPipelineDesc {
                             ..Default::default()
                         },
-                        &[
-                            VertexBufferLayout {
-                                location: 0,
-                                format: wgpu::VertexFormat::Float32x3,
-                                step_mode: wgpu::VertexStepMode::Vertex,
-                            },
-                            VertexBufferLayout {
-                                location: 1,
-                                format: wgpu::VertexFormat::Float32x3,
-                                step_mode: wgpu::VertexStepMode::Vertex,
-                            },
-                            VertexBufferLayout {
-                                location: 2,
-                                format: wgpu::VertexFormat::Float32x2,
-                                step_mode: wgpu::VertexStepMode::Vertex,
-                            },
-                            VertexBufferLayout {
-                                location: 3,
-                                format: wgpu::VertexFormat::Float32x4,
-                                step_mode: wgpu::VertexStepMode::Instance,
-                            },
-                        ],
+                        INSTANCED_FORMAT,
                     );
 
                     let bind_group = device.get_bind_group(
-                        "trees bind group",
+                        "trees",
                         pipeline,
                         &[
                             BindingResource::Buffer(&uniform_buffer),
@@ -1104,13 +1073,8 @@ async fn run() {
                     render_pass.set_pipeline(&pipeline.pipeline);
                     render_pass.set_bind_group(0, bind_group, &[]);
 
-                    render_pass.set_vertex_buffer(0, tree.positions.slice(..));
-                    render_pass.set_vertex_buffer(1, tree.normals.slice(..));
-                    render_pass.set_vertex_buffer(2, tree.uvs.slice(..));
                     render_pass.set_vertex_buffer(3, forest_points.slice(..));
-                    render_pass.set_index_buffer(tree.indices.slice(..), wgpu::IndexFormat::Uint32);
-
-                    render_pass.draw_indexed(0..tree.num_indices, 0, 0..num_forest_points);
+                    tree.render(&mut render_pass, num_forest_points);
                 }
 
                 {
@@ -1131,32 +1095,11 @@ async fn run() {
                         RenderPipelineDesc {
                             ..Default::default()
                         },
-                        &[
-                            VertexBufferLayout {
-                                location: 0,
-                                format: wgpu::VertexFormat::Float32x3,
-                                step_mode: wgpu::VertexStepMode::Vertex,
-                            },
-                            VertexBufferLayout {
-                                location: 1,
-                                format: wgpu::VertexFormat::Float32x3,
-                                step_mode: wgpu::VertexStepMode::Vertex,
-                            },
-                            VertexBufferLayout {
-                                location: 2,
-                                format: wgpu::VertexFormat::Float32x2,
-                                step_mode: wgpu::VertexStepMode::Vertex,
-                            },
-                            VertexBufferLayout {
-                                location: 3,
-                                format: wgpu::VertexFormat::Float32x4,
-                                step_mode: wgpu::VertexStepMode::Instance,
-                            },
-                        ],
+                        INSTANCED_FORMAT,
                     );
 
                     let bind_group = device.get_bind_group(
-                        "house bind group",
+                        "house",
                         pipeline,
                         &[
                             BindingResource::Buffer(&uniform_buffer),
@@ -1169,14 +1112,8 @@ async fn run() {
                     render_pass.set_pipeline(&pipeline.pipeline);
                     render_pass.set_bind_group(0, bind_group, &[]);
 
-                    render_pass.set_vertex_buffer(0, house.positions.slice(..));
-                    render_pass.set_vertex_buffer(1, house.normals.slice(..));
-                    render_pass.set_vertex_buffer(2, house.uvs.slice(..));
                     render_pass.set_vertex_buffer(3, house_points.slice(..));
-                    render_pass
-                        .set_index_buffer(house.indices.slice(..), wgpu::IndexFormat::Uint32);
-
-                    render_pass.draw_indexed(0..house.num_indices, 0, 0..num_house_points);
+                    house.render(&mut render_pass, num_house_points);
                 }
             }
 
@@ -1227,29 +1164,16 @@ async fn run() {
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         ..Default::default()
                     },
-                    &[
-                        VertexBufferLayout {
-                            location: 0,
-                            format: wgpu::VertexFormat::Float32x3,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                        },
-                        VertexBufferLayout {
-                            location: 1,
-                            format: wgpu::VertexFormat::Float32x3,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                        },
-                        VertexBufferLayout {
-                            location: 2,
-                            format: wgpu::VertexFormat::Float32x2,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                        },
-                    ],
+                    BASIC_FORMAT,
                 );
 
-                let height_map = device.device.try_get_cached_texture("height map").unwrap();
+                let height_map = device
+                    .device
+                    .try_get_cached_texture("height map")
+                    .expect("Failed to get cached texture.");
 
                 let bind_group = device.get_bind_group(
-                    "water bind group",
+                    "water",
                     pipeline,
                     &[
                         BindingResource::Buffer(&uniform_buffer),
@@ -1263,13 +1187,7 @@ async fn run() {
                 render_pass.set_pipeline(&pipeline.pipeline);
                 render_pass.set_bind_group(0, bind_group, &[]);
 
-                render_pass.set_vertex_buffer(0, water.positions.slice(..));
-                render_pass.set_vertex_buffer(1, water.normals.slice(..));
-
-                render_pass.set_vertex_buffer(2, water.uvs.slice(..));
-                render_pass.set_index_buffer(water.indices.slice(..), wgpu::IndexFormat::Uint32);
-
-                render_pass.draw_indexed(0..water.num_indices, 0, 0..1);
+                water.render(&mut render_pass, 1);
 
                 {
                     let pipeline = device.get_pipeline(
@@ -1290,27 +1208,11 @@ async fn run() {
                             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                             ..Default::default()
                         },
-                        &[
-                            VertexBufferLayout {
-                                location: 0,
-                                format: wgpu::VertexFormat::Float32x3,
-                                step_mode: wgpu::VertexStepMode::Vertex,
-                            },
-                            VertexBufferLayout {
-                                location: 1,
-                                format: wgpu::VertexFormat::Float32x3,
-                                step_mode: wgpu::VertexStepMode::Vertex,
-                            },
-                            VertexBufferLayout {
-                                location: 2,
-                                format: wgpu::VertexFormat::Float32x2,
-                                step_mode: wgpu::VertexStepMode::Vertex,
-                            },
-                        ],
+                        BASIC_FORMAT,
                     );
 
                     let bind_group = device.get_bind_group(
-                        "meteor outline bind group",
+                        "meteor outline",
                         pipeline,
                         &[
                             BindingResource::Buffer(&uniform_buffer),
@@ -1323,13 +1225,7 @@ async fn run() {
                     render_pass.set_pipeline(&pipeline.pipeline);
                     render_pass.set_bind_group(0, bind_group, &[]);
 
-                    render_pass.set_vertex_buffer(0, meteor.positions.slice(..));
-                    render_pass.set_vertex_buffer(1, meteor.normals.slice(..));
-                    render_pass.set_vertex_buffer(2, meteor.uvs.slice(..));
-                    render_pass
-                        .set_index_buffer(meteor.indices.slice(..), wgpu::IndexFormat::Uint32);
-
-                    render_pass.draw_indexed(0..meteor.num_indices, 0, 0..1);
+                    meteor.render(&mut render_pass, 1);
                 }
 
                 let pipeline = device.get_pipeline(
@@ -1351,22 +1247,11 @@ async fn run() {
 
                         ..Default::default()
                     },
-                    &[
-                        VertexBufferLayout {
-                            location: 0,
-                            format: wgpu::VertexFormat::Float32x3,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                        },
-                        VertexBufferLayout {
-                            location: 1,
-                            format: wgpu::VertexFormat::Float32x3,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                        },
-                    ],
+                    BASIC_FORMAT,
                 );
 
                 let bind_group = device.get_bind_group(
-                    "bounce sphere bind group",
+                    "bounce sphere",
                     pipeline,
                     &[
                         BindingResource::Buffer(&uniform_buffer),
@@ -1377,12 +1262,7 @@ async fn run() {
                 render_pass.set_pipeline(&pipeline.pipeline);
                 render_pass.set_bind_group(0, bind_group, &[]);
 
-                render_pass.set_vertex_buffer(0, bounce_sphere.positions.slice(..));
-                render_pass.set_vertex_buffer(1, bounce_sphere.normals.slice(..));
-                render_pass
-                    .set_index_buffer(bounce_sphere.indices.slice(..), wgpu::IndexFormat::Uint32);
-
-                render_pass.draw_indexed(0..bounce_sphere.num_indices, 0, 0..1);
+                bounce_sphere.render(&mut render_pass, 1);
             }
 
             drop(render_pass);
@@ -1443,224 +1323,6 @@ struct KeyboardState {
     right: bool,
     up: bool,
     down: bool,
-}
-
-struct Model {
-    positions: wgpu::Buffer,
-    normals: wgpu::Buffer,
-    uvs: wgpu::Buffer,
-    indices: wgpu::Buffer,
-    joints: wgpu::Buffer,
-    weights: wgpu::Buffer,
-    num_indices: u32,
-    depth_first_nodes: Vec<(usize, Option<usize>)>,
-    animations: Vec<animation::Animation>,
-    inverse_bind_matrices: Vec<Mat4>,
-    joint_indices_to_node_indices: Vec<usize>,
-}
-
-impl Model {
-    fn new(
-        bytes: &[u8],
-        device: &wgpu::Device,
-        name: &str,
-    ) -> anyhow::Result<(Self, animation::AnimationJoints)> {
-        let gltf = gltf::Gltf::from_slice(bytes)?;
-
-        let buffer_blob = gltf.blob.as_ref().unwrap();
-
-        let node_tree = NodeTree::new(gltf.nodes());
-
-        let mut indices = Vec::new();
-        let mut positions = Vec::new();
-        let mut normals = Vec::new();
-        let mut uvs = Vec::new();
-        let mut joints = Vec::new();
-        let mut weights = Vec::new();
-
-        for (node, mesh) in gltf
-            .nodes()
-            .filter_map(|node| node.mesh().map(|mesh| (node, mesh)))
-        {
-            let transform = node_tree.transform_of(node.index());
-
-            for primitive in mesh.primitives() {
-                let reader = primitive.reader(|buffer| {
-                    assert_eq!(buffer.index(), 0);
-                    Some(buffer_blob)
-                });
-
-                let read_indices = reader.read_indices().unwrap().into_u32();
-
-                let num_existing_vertices = positions.len();
-
-                indices.extend(read_indices.map(|index| index + num_existing_vertices as u32));
-
-                positions.extend(
-                    reader
-                        .read_positions()
-                        .unwrap()
-                        .map(|pos| transform * Vec3::from(pos)),
-                );
-
-                normals.extend(
-                    reader
-                        .read_normals()
-                        .unwrap()
-                        .map(|normal| transform.rotation * Vec3::from(normal)),
-                );
-
-                uvs.extend(
-                    reader
-                        .read_tex_coords(0)
-                        .unwrap()
-                        .into_f32()
-                        .map(Vec2::from),
-                );
-
-                if let Some(read_joints) = reader.read_joints(0) {
-                    joints.extend(read_joints.into_u16());
-                }
-
-                if let Some(read_weights) = reader.read_weights(0) {
-                    weights.extend(read_weights.into_f32());
-                }
-            }
-        }
-
-        let depth_first_nodes: Vec<_> = node_tree.iter_depth_first().collect();
-        let animations = animation::read_animations(gltf.animations(), buffer_blob, name);
-        let animation_joints = animation::AnimationJoints::new(gltf.nodes(), &depth_first_nodes);
-
-        let skin = gltf.skins().next();
-
-        let joint_indices_to_node_indices: Vec<usize> = if let Some(skin) = skin.as_ref() {
-            skin.joints().map(|node| node.index()).collect()
-        } else {
-            gltf.nodes().map(|node| node.index()).collect()
-        };
-
-        let inverse_bind_matrices: Vec<Mat4> = if let Some(skin) = skin.as_ref() {
-            skin.reader(|buffer| {
-                assert_eq!(buffer.index(), 0);
-                Some(buffer_blob)
-            })
-            .read_inverse_bind_matrices()
-            .ok_or_else(|| anyhow::anyhow!("Missing inverse bind matrices"))?
-            .map(|mat| Mat4::from_cols_array_2d(&mat))
-            .collect()
-        } else {
-            gltf.nodes()
-                .map(|node| node_tree.transform_of(node.index()).as_mat4().inverse())
-                .collect()
-        };
-
-        Ok((
-            Self {
-                positions: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("{} positions buffer", name)),
-                    contents: bytemuck::cast_slice(&positions),
-                    usage: wgpu::BufferUsages::VERTEX,
-                }),
-                indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("{} indices buffer", name)),
-                    contents: bytemuck::cast_slice(&indices),
-                    usage: wgpu::BufferUsages::INDEX,
-                }),
-                normals: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("{} normals buffer", name)),
-                    contents: bytemuck::cast_slice(&normals),
-                    usage: wgpu::BufferUsages::VERTEX,
-                }),
-                uvs: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("{} uvs buffer", name)),
-                    contents: bytemuck::cast_slice(&uvs),
-                    usage: wgpu::BufferUsages::VERTEX,
-                }),
-                joints: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("{} joints buffer", name)),
-                    contents: bytemuck::cast_slice(&joints),
-                    usage: wgpu::BufferUsages::VERTEX,
-                }),
-                weights: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("{} weights buffer", name)),
-                    contents: bytemuck::cast_slice(&weights),
-                    usage: wgpu::BufferUsages::VERTEX,
-                }),
-                num_indices: indices.len() as u32,
-                depth_first_nodes,
-                animations,
-                joint_indices_to_node_indices,
-                inverse_bind_matrices,
-            },
-            animation_joints,
-        ))
-    }
-}
-pub struct NodeTree {
-    inner: Vec<(Similarity, usize)>,
-}
-
-impl NodeTree {
-    fn new(nodes: gltf::iter::Nodes) -> Self {
-        let mut inner = vec![(Similarity::IDENTITY, usize::max_value()); nodes.clone().count()];
-
-        for node in nodes {
-            let (translation, rotation, scale) = node.transform().decomposed();
-
-            assert!(
-                (scale[0] - scale[1]).abs() <= std::f32::EPSILON * 10.0,
-                "{:?}",
-                scale
-            );
-            assert!(
-                (scale[0] - scale[2]).abs() <= std::f32::EPSILON * 10.0,
-                "{:?}",
-                scale
-            );
-
-            inner[node.index()].0 = Similarity {
-                translation: translation.into(),
-                rotation: Quat::from_array(rotation),
-                scale: scale[0],
-            };
-            for child in node.children() {
-                inner[child.index()].1 = node.index();
-            }
-        }
-
-        Self { inner }
-    }
-
-    pub fn transform_of(&self, mut index: usize) -> Similarity {
-        let mut transform_sum = Similarity::IDENTITY;
-
-        while index != usize::max_value() {
-            let (transform, parent_index) = self.inner[index];
-            transform_sum = transform * transform_sum;
-            index = parent_index;
-        }
-
-        transform_sum
-    }
-
-    // It turns out that we can just reverse the array to iter through nodes depth first! Useful for applying animations.
-    fn iter_depth_first(&self) -> impl Iterator<Item = (usize, Option<usize>)> + '_ {
-        self.inner
-            .iter()
-            .enumerate()
-            .rev()
-            .map(|(index, &(_, parent))| {
-                (
-                    index,
-                    if parent != usize::max_value() {
-                        Some(parent)
-                    } else {
-                        None
-                    },
-                )
-            })
-    }
 }
 
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Default)]
@@ -1824,38 +1486,6 @@ impl HeightMap {
         self.floats[pos]
     }
 }
-fn load_image(
-    device: &Device,
-    queue: &wgpu::Queue,
-    bytes: &[u8],
-    name: &str,
-) -> kiss_engine_wgpu::Resource<kiss_engine_wgpu::TextureInner> {
-    let image = image::load_from_memory(bytes).unwrap().to_rgba8();
-
-    let texture = device.inner.create_texture_with_data(
-        queue,
-        &wgpu::TextureDescriptor {
-            label: Some(name),
-            size: wgpu::Extent3d {
-                width: image.width(),
-                height: image.height(),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-        },
-        &*image,
-    );
-
-    device.create_resource(kiss_engine_wgpu::TextureInner {
-        view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
-        texture,
-    })
-}
-
 fn main() {
     #[cfg(feature = "wasm")]
     wasm_bindgen_futures::spawn_local(run());

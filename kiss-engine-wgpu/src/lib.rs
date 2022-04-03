@@ -38,7 +38,7 @@ fn reflect_bind_group_layout_entries(
 ) -> Vec<wgpu::BindGroupLayoutEntry> {
     let shader_stages = reflect_shader_stages(reflection);
 
-    let descriptor_sets = reflection.get_descriptor_sets().unwrap();
+    let descriptor_sets = reflection.get_descriptor_sets().expect("Failed to get descriptor sets for shader reflection");
 
     if descriptor_sets.is_empty() {
         return Vec::new();
@@ -61,7 +61,7 @@ fn reflect_bind_group_layout_entries(
             count: match info.binding_count {
                 rspirv_reflect::BindingCount::One => None,
                 rspirv_reflect::BindingCount::StaticSized(size) => {
-                    Some(std::num::NonZeroU32::new(size as u32).unwrap())
+                    Some(std::num::NonZeroU32::new(size as u32).expect("size is 0"))
                 }
                 rspirv_reflect::BindingCount::Unbounded => {
                     unimplemented!("No good way to handle unbounded binding counts yet.")
@@ -329,7 +329,7 @@ impl Shader {
                 source: wgpu::util::make_spirv(bytes),
             }),
             reflected_bind_group_layout_entries: {
-                let reflection = rspirv_reflect::Reflection::new_from_spirv(bytes).unwrap();
+                let reflection = rspirv_reflect::Reflection::new_from_spirv(bytes).expect("Failed to create reflection from spirv bytes");
                 reflect_bind_group_layout_entries(&reflection, bind_group_layout_settings)
             },
         }
@@ -419,7 +419,7 @@ impl Device {
         bind_group_layout_settings: BindGroupLayoutSettings,
     ) -> &ReloadableShader {
         self.shaders.get_or_insert_with(filename, || {
-            let bytes = std::fs::read(filename).unwrap();
+            let bytes = std::fs::read(filename).expect("Failed to read shader");
 
             let shader = Arc::new(ReloadableShader {
                 shader: parking_lot::Mutex::new(Shader::load(
@@ -439,15 +439,15 @@ impl Device {
 
                     let (tx, rx) = std::sync::mpsc::channel();
 
-                    let mut watcher = notify::raw_watcher(tx).unwrap();
+                    let mut watcher = notify::raw_watcher(tx).expect("Failed to create a notify watcher");
 
                     watcher
                         .watch(filename, notify::RecursiveMode::NonRecursive)
-                        .unwrap();
+                        .expect("Failed to watch file");
 
                     for _ in rx.iter() {
                         log::info!("Reloading {}", filename);
-                        let bytes = std::fs::read(filename).unwrap();
+                        let bytes = std::fs::read(filename).expect("Failed to reload shader");
                         *shader.shader.lock() =
                             Shader::load(&device, filename, &bytes, &bind_group_layout_settings);
                         shader
@@ -582,7 +582,7 @@ impl Device {
         &self,
         descriptor: &wgpu::TextureDescriptor<'static>,
     ) -> &Resource<TextureInner> {
-        let name = descriptor.label.unwrap();
+        let name = descriptor.label.expect("TextureDescriptor needs a label");
 
         let create_texture_fn = || Texture {
             texture: self.create_resource({

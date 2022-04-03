@@ -13,6 +13,7 @@
 struct In {
     [[vk::location(0)]] float3 pos: TEXCOORD0;
     [[vk::location(1)]] float3 normal: TEXCOORD1;
+    [[vk::location(2)]] float3 uv: TEXCOORD2;
 };
 
 struct Out {

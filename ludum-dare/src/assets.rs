@@ -1,0 +1,277 @@
+use crate::Similarity;
+use glam::Mat4;
+use glam::Quat;
+use glam::Vec2;
+use glam::Vec3;
+use kiss_engine_wgpu::Device;
+use wgpu::util::DeviceExt;
+
+use crate::animation;
+
+pub struct Model {
+    positions: wgpu::Buffer,
+    normals: wgpu::Buffer,
+    uvs: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    num_indices: u32,
+    pub joints: wgpu::Buffer,
+    pub weights: wgpu::Buffer,
+    pub depth_first_nodes: Vec<(usize, Option<usize>)>,
+    pub animations: Vec<animation::Animation>,
+    pub inverse_bind_matrices: Vec<Mat4>,
+    pub joint_indices_to_node_indices: Vec<usize>,
+}
+
+impl Model {
+    pub fn new(
+        bytes: &[u8],
+        device: &wgpu::Device,
+        name: &str,
+    ) -> (Self, animation::AnimationJoints) {
+        let gltf = gltf::Gltf::from_slice(bytes).expect("Failed to read gltf");
+
+        let buffer_blob = gltf
+            .blob
+            .as_ref()
+            .expect("Failed to get buffer blob. Make sure you're loading a .glb and not a .gltf.");
+
+        let node_tree = NodeTree::new(gltf.nodes());
+
+        let mut indices = Vec::new();
+        let mut positions = Vec::new();
+        let mut normals = Vec::new();
+        let mut uvs = Vec::new();
+        let mut joints = Vec::new();
+        let mut weights = Vec::new();
+
+        for (node, mesh) in gltf
+            .nodes()
+            .filter_map(|node| node.mesh().map(|mesh| (node, mesh)))
+        {
+            let transform = node_tree.transform_of(node.index());
+
+            for primitive in mesh.primitives() {
+                let reader = primitive.reader(|buffer| {
+                    assert_eq!(buffer.index(), 0);
+                    Some(buffer_blob)
+                });
+
+                let read_indices = reader
+                    .read_indices()
+                    .expect("Failed to read indices")
+                    .into_u32();
+
+                let num_existing_vertices = positions.len();
+
+                indices.extend(read_indices.map(|index| index + num_existing_vertices as u32));
+
+                positions.extend(
+                    reader
+                        .read_positions()
+                        .expect("Failed to read positions")
+                        .map(|pos| transform * Vec3::from(pos)),
+                );
+
+                normals.extend(
+                    reader
+                        .read_normals()
+                        .expect("Failed to read normals")
+                        .map(|normal| transform.rotation * Vec3::from(normal)),
+                );
+
+                uvs.extend(
+                    reader
+                        .read_tex_coords(0)
+                        .expect("Failed to read tex coords (0)")
+                        .into_f32()
+                        .map(Vec2::from),
+                );
+
+                if let Some(read_joints) = reader.read_joints(0) {
+                    joints.extend(read_joints.into_u16());
+                }
+
+                if let Some(read_weights) = reader.read_weights(0) {
+                    weights.extend(read_weights.into_f32());
+                }
+            }
+        }
+
+        let depth_first_nodes: Vec<_> = node_tree.iter_depth_first().collect();
+        let animations = animation::read_animations(gltf.animations(), buffer_blob, name);
+        let animation_joints = animation::AnimationJoints::new(gltf.nodes(), &depth_first_nodes);
+
+        let skin = gltf.skins().next();
+
+        let joint_indices_to_node_indices: Vec<usize> = if let Some(skin) = skin.as_ref() {
+            skin.joints().map(|node| node.index()).collect()
+        } else {
+            gltf.nodes().map(|node| node.index()).collect()
+        };
+
+        let inverse_bind_matrices: Vec<Mat4> = if let Some(skin) = skin.as_ref() {
+            skin.reader(|buffer| {
+                assert_eq!(buffer.index(), 0);
+                Some(buffer_blob)
+            })
+            .read_inverse_bind_matrices()
+            .expect("Missing inverse bind matrices")
+            .map(|mat| Mat4::from_cols_array_2d(&mat))
+            .collect()
+        } else {
+            gltf.nodes()
+                .map(|node| node_tree.transform_of(node.index()).as_mat4().inverse())
+                .collect()
+        };
+
+        (
+            Self {
+                positions: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("{} positions buffer", name)),
+                    contents: bytemuck::cast_slice(&positions),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+                indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("{} indices buffer", name)),
+                    contents: bytemuck::cast_slice(&indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                }),
+                normals: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("{} normals buffer", name)),
+                    contents: bytemuck::cast_slice(&normals),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+                uvs: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("{} uvs buffer", name)),
+                    contents: bytemuck::cast_slice(&uvs),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+                joints: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("{} joints buffer", name)),
+                    contents: bytemuck::cast_slice(&joints),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+                weights: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("{} weights buffer", name)),
+                    contents: bytemuck::cast_slice(&weights),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+                num_indices: indices.len() as u32,
+                depth_first_nodes,
+                animations,
+                joint_indices_to_node_indices,
+                inverse_bind_matrices,
+            },
+            animation_joints,
+        )
+    }
+
+    pub fn render<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>, num_instances: u32) {
+        render_pass.set_vertex_buffer(0, self.positions.slice(..));
+        render_pass.set_vertex_buffer(1, self.normals.slice(..));
+        render_pass.set_vertex_buffer(2, self.uvs.slice(..));
+        render_pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+
+        render_pass.draw_indexed(0..self.num_indices, 0, 0..num_instances);
+    }
+}
+
+pub struct NodeTree {
+    inner: Vec<(Similarity, usize)>,
+}
+
+impl NodeTree {
+    fn new(nodes: gltf::iter::Nodes) -> Self {
+        let mut inner = vec![(Similarity::IDENTITY, usize::max_value()); nodes.clone().count()];
+
+        for node in nodes {
+            let (translation, rotation, scale) = node.transform().decomposed();
+
+            assert!(
+                (scale[0] - scale[1]).abs() <= std::f32::EPSILON * 10.0,
+                "{:?}",
+                scale
+            );
+            assert!(
+                (scale[0] - scale[2]).abs() <= std::f32::EPSILON * 10.0,
+                "{:?}",
+                scale
+            );
+
+            inner[node.index()].0 = Similarity {
+                translation: translation.into(),
+                rotation: Quat::from_array(rotation),
+                scale: scale[0],
+            };
+            for child in node.children() {
+                inner[child.index()].1 = node.index();
+            }
+        }
+
+        Self { inner }
+    }
+
+    pub fn transform_of(&self, mut index: usize) -> Similarity {
+        let mut transform_sum = Similarity::IDENTITY;
+
+        while index != usize::max_value() {
+            let (transform, parent_index) = self.inner[index];
+            transform_sum = transform * transform_sum;
+            index = parent_index;
+        }
+
+        transform_sum
+    }
+
+    // It turns out that we can just reverse the array to iter through nodes depth first! Useful for applying animations.
+    fn iter_depth_first(&self) -> impl Iterator<Item = (usize, Option<usize>)> + '_ {
+        self.inner
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(index, &(_, parent))| {
+                (
+                    index,
+                    if parent != usize::max_value() {
+                        Some(parent)
+                    } else {
+                        None
+                    },
+                )
+            })
+    }
+}
+
+pub fn load_image(
+    device: &Device,
+    queue: &wgpu::Queue,
+    bytes: &[u8],
+    name: &str,
+) -> kiss_engine_wgpu::Resource<kiss_engine_wgpu::TextureInner> {
+    let image = image::load_from_memory(bytes)
+        .expect("Failed to read image")
+        .to_rgba8();
+
+    let texture = device.inner.create_texture_with_data(
+        queue,
+        &wgpu::TextureDescriptor {
+            label: Some(name),
+            size: wgpu::Extent3d {
+                width: image.width(),
+                height: image.height(),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        },
+        &*image,
+    );
+
+    device.create_resource(kiss_engine_wgpu::TextureInner {
+        view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
+        texture,
+    })
+}
