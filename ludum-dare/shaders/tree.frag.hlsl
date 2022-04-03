@@ -10,6 +10,7 @@ struct In {
 
 struct Out {
     float4 color: SV_TARGET0;
+    float4 color2: SV_TARGET1;
 };
 
 [[vk::binding(1)]] cbuffer _ {
@@ -27,6 +28,7 @@ Out main(In input) {
     output.color = float4(forest_tex.Sample(tex_sampler, input.uv) * diffuse, 1.0);
 
     output.color *= shadow_factor(input.position, meteor_position);
+    output.color2 = output.color;
 
 
     return output;

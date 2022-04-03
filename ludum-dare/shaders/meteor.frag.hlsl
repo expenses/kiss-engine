@@ -9,6 +9,7 @@ struct In {
 
 struct Out {
     float4 color: SV_TARGET0;
+    float4 color2: SV_TARGET1;
 };
 
 [[vk::binding(2)]] sampler tex_sampler;
@@ -18,6 +19,7 @@ Out main(In input) {
     Out output;
 
     output.color = float4(texture2.Sample(tex_sampler, input.uv), 1.0);
+    output.color2 = output.color;
 
     return output;
 }

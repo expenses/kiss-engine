@@ -22,6 +22,7 @@ struct In {
 
 struct Out {
     float4 color: SV_TARGET0;
+    float4 color2: SV_TARGET1;
 };
 
 Out main(In input) {
@@ -48,6 +49,7 @@ Out main(In input) {
     color *= shadow_factor(input.position, meteor_position);
 
     output.color = float4(color, 1.0);
+    output.color2 = float4(color, 1.0);
 
     return output;
 }

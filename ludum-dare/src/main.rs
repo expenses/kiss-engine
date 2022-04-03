@@ -4,7 +4,9 @@ use glam::Quat;
 use glam::Vec2;
 use glam::Vec3;
 use glam::Vec4;
-use kiss_engine_wgpu::{BindingResource, Device, RenderPipelineDesc, VertexBufferLayout};
+use kiss_engine_wgpu::{
+    BindGroupLayoutSettings, BindingResource, Device, RenderPipelineDesc, VertexBufferLayout,
+};
 use rand::Rng;
 use std::ops::*;
 
@@ -106,8 +108,9 @@ fn main() {
     ))
     .unwrap();
 
-    let mut glyph_brush =
-        wgpu_glyph::GlyphBrushBuilder::using_font(font).build(&device, config.format);
+    let mut glyph_brush = wgpu_glyph::GlyphBrushBuilder::using_font(font)
+        .initial_cache_size((512, 512))
+        .build(&device, config.format);
 
     let mut staging_belt = wgpu::util::StagingBelt::new(1024);
 
@@ -143,6 +146,8 @@ fn main() {
                     + player_height_offset
                     + orbit.as_vector(),
                 time,
+                window_size: Vec2::new(config.width as f32, config.height as f32),
+                ..Default::default()
             }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         },
@@ -229,7 +234,7 @@ fn main() {
             depth_stencil_attachment: None,
         });
 
-        let device = device.with_formats(wgpu::TextureFormat::R32Float, None);
+        let device = device.with_formats(&[wgpu::TextureFormat::R32Float], None);
 
         let pipeline = device.get_pipeline(
             "bake pipeline",
@@ -237,11 +242,13 @@ fn main() {
                 "shaders/compiled/bake_height_map.vert.spv",
                 #[cfg(feature = "standalone")]
                 include_bytes!("../shaders/compiled/bake_height_map.vert.spv"),
+                Default::default(),
             ),
             device.device.get_shader(
                 "shaders/compiled/bake_height_map.frag.spv",
                 #[cfg(feature = "standalone")]
                 include_bytes!("../shaders/compiled/bake_height_map.frag.spv"),
+                Default::default(),
             ),
             RenderPipelineDesc {
                 primitive: wgpu::PrimitiveState::default(),
@@ -711,6 +718,8 @@ fn main() {
                     player_facing,
                     camera_position: player_position_3d + player_height_offset + orbit.as_vector(),
                     time,
+                    window_size: Vec2::new(config.width as f32, config.height as f32),
+                    ..Default::default()
                 }),
             );
 
@@ -747,25 +756,56 @@ fn main() {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Depth32Float,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
                 label: Some("depth texture"),
+            });
+
+            let opaque_texture = device.get_texture(&wgpu::TextureDescriptor {
+                size: wgpu::Extent3d {
+                    width: config.width,
+                    height: config.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                label: Some("opaque texture"),
             });
 
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main render pass"),
-                color_attachments: &[wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
-                            a: 1.0,
-                        }),
-                        store: true,
+                color_attachments: &[
+                    wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.1,
+                                g: 0.2,
+                                b: 0.3,
+                                a: 1.0,
+                            }),
+                            store: true,
+                        },
                     },
-                }],
+                    wgpu::RenderPassColorAttachment {
+                        view: &opaque_texture.view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.1,
+                                g: 0.2,
+                                b: 0.3,
+                                a: 1.0,
+                            }),
+                            store: true,
+                        },
+                    },
+                ],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &depth_texture.view,
                     depth_ops: Some(wgpu::Operations {
@@ -777,8 +817,9 @@ fn main() {
             });
 
             {
-                let device =
-                    device.with_formats(config.format, Some(wgpu::TextureFormat::Depth32Float));
+                let formats = &[config.format, wgpu::TextureFormat::Rgba8UnormSrgb];
+
+                let device = device.with_formats(formats, Some(wgpu::TextureFormat::Depth32Float));
 
                 let pipeline = device.get_pipeline(
                     "plane pipeline",
@@ -786,11 +827,13 @@ fn main() {
                         "shaders/compiled/plane.vert.spv",
                         #[cfg(feature = "standalone")]
                         include_bytes!("../shaders/compiled/plane.vert.spv"),
+                        Default::default(),
                     ),
                     device.device.get_shader(
                         "shaders/compiled/plane.frag.spv",
                         #[cfg(feature = "standalone")]
                         include_bytes!("../shaders/compiled/plane.frag.spv"),
+                        Default::default(),
                     ),
                     RenderPipelineDesc {
                         ..Default::default()
@@ -847,11 +890,13 @@ fn main() {
                         "shaders/compiled/capsule.vert.spv",
                         #[cfg(feature = "standalone")]
                         include_bytes!("../shaders/compiled/capsule.vert.spv"),
+                        Default::default(),
                     ),
                     device.device.get_shader(
                         "shaders/compiled/tree.frag.spv",
                         #[cfg(feature = "standalone")]
                         include_bytes!("../shaders/compiled/tree.frag.spv"),
+                        Default::default(),
                     ),
                     RenderPipelineDesc {
                         ..Default::default()
@@ -915,11 +960,13 @@ fn main() {
                         "shaders/compiled/meteor.vert.spv",
                         #[cfg(feature = "standalone")]
                         include_bytes!("../shaders/compiled/meteor.vert.spv"),
+                        Default::default(),
                     ),
                     device.device.get_shader(
                         "shaders/compiled/meteor.frag.spv",
                         #[cfg(feature = "standalone")]
                         include_bytes!("../shaders/compiled/meteor.frag.spv"),
+                        Default::default(),
                     ),
                     RenderPipelineDesc {
                         ..Default::default()
@@ -971,11 +1018,13 @@ fn main() {
                             "shaders/compiled/tree.vert.spv",
                             #[cfg(feature = "standalone")]
                             include_bytes!("../shaders/compiled/tree.vert.spv"),
+                            Default::default(),
                         ),
                         device.device.get_shader(
                             "shaders/compiled/tree.frag.spv",
                             #[cfg(feature = "standalone")]
                             include_bytes!("../shaders/compiled/tree.frag.spv"),
+                            Default::default(),
                         ),
                         RenderPipelineDesc {
                             ..Default::default()
@@ -1034,11 +1083,13 @@ fn main() {
                             "shaders/compiled/house.vert.spv",
                             #[cfg(feature = "standalone")]
                             include_bytes!("../shaders/compiled/house.vert.spv"),
+                            Default::default(),
                         ),
                         device.device.get_shader(
                             "shaders/compiled/tree.frag.spv",
                             #[cfg(feature = "standalone")]
                             include_bytes!("../shaders/compiled/tree.frag.spv"),
+                            Default::default(),
                         ),
                         RenderPipelineDesc {
                             ..Default::default()
@@ -1090,6 +1141,34 @@ fn main() {
 
                     render_pass.draw_indexed(0..house.num_indices, 0, 0..num_house_points);
                 }
+            }
+
+            drop(render_pass);
+
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("transmissiion render pass"),
+                color_attachments: &[wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: true,
+                    },
+                }],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_texture.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: true,
+                    }),
+                    stencil_ops: None,
+                }),
+            });
+
+            {
+                let formats = &[config.format];
+
+                let device = device.with_formats(formats, Some(wgpu::TextureFormat::Depth32Float));
 
                 let pipeline = device.get_pipeline(
                     "water pipeline",
@@ -1097,11 +1176,15 @@ fn main() {
                         "shaders/compiled/plane.vert.spv",
                         #[cfg(feature = "standalone")]
                         include_bytes!("../shaders/compiled/plane.vert.spv"),
+                        Default::default(),
                     ),
                     device.device.get_shader(
                         "shaders/compiled/water.frag.spv",
                         #[cfg(feature = "standalone")]
                         include_bytes!("../shaders/compiled/water.frag.spv"),
+                        BindGroupLayoutSettings {
+                            allow_texture_filtering: false,
+                        },
                     ),
                     RenderPipelineDesc {
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -1126,10 +1209,18 @@ fn main() {
                     ],
                 );
 
+                let height_map = device.device.try_get_cached_texture("height map").unwrap();
+
                 let bind_group = device.get_bind_group(
                     "water bind group",
                     pipeline,
-                    &[BindingResource::Buffer(&uniform_buffer)],
+                    &[
+                        BindingResource::Buffer(&uniform_buffer),
+                        BindingResource::Texture(&opaque_texture),
+                        BindingResource::Sampler(&sampler),
+                        BindingResource::Texture(&height_map),
+                        BindingResource::Buffer(&meteor_buffer),
+                    ],
                 );
 
                 render_pass.set_pipeline(&pipeline.pipeline);
@@ -1150,11 +1241,13 @@ fn main() {
                             "shaders/compiled/meteor_outline.vert.spv",
                             #[cfg(feature = "standalone")]
                             include_bytes!("../shaders/compiled/meteor_outline.vert.spv"),
+                            Default::default(),
                         ),
                         device.device.get_shader(
                             "shaders/compiled/meteor_outline.frag.spv",
                             #[cfg(feature = "standalone")]
                             include_bytes!("../shaders/compiled/meteor_outline.frag.spv"),
+                            Default::default(),
                         ),
                         RenderPipelineDesc {
                             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -1208,11 +1301,13 @@ fn main() {
                         "shaders/compiled/bounce_sphere.vert.spv",
                         #[cfg(feature = "standalone")]
                         include_bytes!("../shaders/compiled/bounce_sphere.vert.spv"),
+                        Default::default(),
                     ),
                     device.device.get_shader(
                         "shaders/compiled/bounce_sphere.frag.spv",
                         #[cfg(feature = "standalone")]
                         include_bytes!("../shaders/compiled/bounce_sphere.frag.spv"),
+                        Default::default(),
                     ),
                     RenderPipelineDesc {
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -1531,7 +1626,7 @@ impl NodeTree {
     }
 }
 
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Default)]
 #[repr(C)]
 pub struct Uniforms {
     pub matrices: Mat4,
@@ -1539,6 +1634,8 @@ pub struct Uniforms {
     pub player_facing: f32,
     pub camera_position: Vec3,
     pub time: f32,
+    pub window_size: Vec2,
+    pub _padding: Vec2,
 }
 
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

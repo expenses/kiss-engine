@@ -7,7 +7,9 @@ struct In {
 };
 
 struct Out {
-    [[vk::location(0)]] float4 color: TEXCOORD0;
+    float4 color: SV_TARGET0;
+    float4 color2: SV_TARGET1;
+
 };
 
 [[vk::binding(1)]] cbuffer _ {
@@ -28,6 +30,7 @@ Out main(In input) {
     float alpha = (0.75 * (1.0 - fresnel * 0.75)) * alpha_scale_multiplier;
 
     output.color = float4(float3(0.5, 0.0, 0.5) * alpha, alpha);
+    output.color2 = output.color;
 
     return output;
 }

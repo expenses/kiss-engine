@@ -20,8 +20,21 @@ fn reflect_shader_stages(reflection: &rspirv_reflect::Reflection) -> wgpu::Shade
     }
 }
 
+pub struct BindGroupLayoutSettings {
+    pub allow_texture_filtering: bool,
+}
+
+impl Default for BindGroupLayoutSettings {
+    fn default() -> Self {
+        Self {
+            allow_texture_filtering: true,
+        }
+    }
+}
+
 fn reflect_bind_group_layout_entries(
     reflection: &rspirv_reflect::Reflection,
+    settings: &BindGroupLayoutSettings,
 ) -> Vec<wgpu::BindGroupLayoutEntry> {
     let shader_stages = reflect_shader_stages(reflection);
 
@@ -61,10 +74,14 @@ fn reflect_bind_group_layout_entries(
                     min_binding_size: None,
                 },
                 rspirv_reflect::DescriptorType::SAMPLER => {
-                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)
+                    wgpu::BindingType::Sampler(if settings.allow_texture_filtering {
+                        wgpu::SamplerBindingType::Filtering
+                    } else {
+                        wgpu::SamplerBindingType::NonFiltering
+                    })
                 }
                 rspirv_reflect::DescriptorType::SAMPLED_IMAGE => wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    sample_type: wgpu::TextureSampleType::Float { filterable: settings.allow_texture_filtering },
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
@@ -148,7 +165,7 @@ fn create_render_pipeline(
     fragment_shader: &Shader,
     render_pipeline_desc: RenderPipelineDesc,
     vertex_buffer_layout: &[VertexBufferLayout],
-    attachment_texture_format: wgpu::TextureFormat,
+    attachment_texture_formats: &[wgpu::TextureFormat],
     depth_stencil_attachment_format: Option<wgpu::TextureFormat>,
     shader_versions: (u32, Option<u32>),
 ) -> RenderPipeline {
@@ -171,6 +188,16 @@ fn create_render_pipeline(
         .map(|layout| layout.attribute_array())
         .collect::<Vec<_>>();
 
+    let targets: Vec<_> = attachment_texture_formats.iter()
+        .map(|&format| {
+            wgpu::ColorTargetState {
+                format,
+                blend: render_pipeline_desc.blend,
+                write_mask: wgpu::ColorWrites::ALL
+            }
+        })
+        .collect();
+
     let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(name),
         layout: Some(&pipeline_layout),
@@ -192,11 +219,7 @@ fn create_render_pipeline(
         fragment: Some(wgpu::FragmentState {
             module: &fragment_shader.module,
             entry_point: "main",
-            targets: &[wgpu::ColorTargetState {
-                format: attachment_texture_format,
-                blend: render_pipeline_desc.blend,
-                write_mask: wgpu::ColorWrites::ALL,
-            }],
+            targets: &targets,
         }),
         primitive: render_pipeline_desc.primitive,
         depth_stencil: depth_stencil_attachment_format.map(|format| wgpu::DepthStencilState {
@@ -293,7 +316,7 @@ struct Shader {
 }
 
 impl Shader {
-    fn load(device: &wgpu::Device, filename: &str, bytes: &[u8]) -> Self {
+    fn load(device: &wgpu::Device, filename: &str, bytes: &[u8], bind_group_layout_settings: &BindGroupLayoutSettings) -> Self {
         Self {
             module: device.create_shader_module(&wgpu::ShaderModuleDescriptor {
                 label: Some(filename),
@@ -301,7 +324,7 @@ impl Shader {
             }),
             reflected_bind_group_layout_entries: {
                 let reflection = rspirv_reflect::Reflection::new_from_spirv(bytes).unwrap();
-                reflect_bind_group_layout_entries(&reflection)
+                reflect_bind_group_layout_entries(&reflection, bind_group_layout_settings)
             },
         }
     }
@@ -383,13 +406,13 @@ impl Device {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn get_shader(&self, filename: &'static str) -> &ReloadableShader {
+    #[cfg(not(any(target_arch = "wasm32", feature = "standalone")))]
+    pub fn get_shader(&self, filename: &'static str, bind_group_layout_settings: BindGroupLayoutSettings) -> &ReloadableShader {
         self.shaders.get_or_insert_with(filename, || {
             let bytes = std::fs::read(filename).unwrap();
 
             let shader = Arc::new(ReloadableShader {
-                shader: parking_lot::Mutex::new(Shader::load(&self.inner, filename, &bytes)),
+                shader: parking_lot::Mutex::new(Shader::load(&self.inner, filename, &bytes, &bind_group_layout_settings)),
                 version: Default::default(),
             });
 
@@ -410,7 +433,7 @@ impl Device {
                     for _ in rx.iter() {
                         log::info!("Reloading {}", filename);
                         let bytes = std::fs::read(filename).unwrap();
-                        *shader.shader.lock() = Shader::load(&device, filename, &bytes);
+                        *shader.shader.lock() = Shader::load(&device, filename, &bytes, &bind_group_layout_settings);
                         shader
                             .version
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -424,15 +447,11 @@ impl Device {
         })
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub fn get_shader(&self, filename: &'static str, bytes: &[u8]) -> &ReloadableShader {
-        self.get_shader_from_bytes(filename, bytes)
-    }
-
-    pub fn get_shader_from_bytes(&self, filename: &'static str, bytes: &[u8]) -> &ReloadableShader {
+    #[cfg(any(target_arch = "wasm32", feature = "standalone"))]
+    pub fn get_shader(&self, filename: &'static str, bytes: &[u8], bind_group_layout_settings: BindGroupLayoutSettings) -> &ReloadableShader {
         self.shaders.get_or_insert_with(filename, || {
             let shader = Arc::new(ReloadableShader {
-                shader: parking_lot::Mutex::new(Shader::load(&self.inner, filename, &bytes)),
+                shader: parking_lot::Mutex::new(Shader::load(&self.inner, filename, &bytes, &bind_group_layout_settings)),
                 version: Default::default(),
             });
 
@@ -447,7 +466,7 @@ impl Device {
         fragment_shader: &ReloadableShader,
         render_pipeline_desc: RenderPipelineDesc,
         buffer_layout: &[VertexBufferLayout],
-        attachment_texture_format: wgpu::TextureFormat,
+        attachment_texture_formats: &[wgpu::TextureFormat],
         depth_stencil_attachment_format: Option<wgpu::TextureFormat>,
     ) -> &RenderPipeline {
         let shader_versions = (
@@ -463,7 +482,7 @@ impl Device {
                 &fragment_shader.shader.lock(),
                 render_pipeline_desc,
                 buffer_layout,
-                attachment_texture_format,
+                attachment_texture_formats,
                 depth_stencil_attachment_format,
                 shader_versions,
             )
@@ -521,14 +540,14 @@ impl Device {
         self.textures.flush("textures");
     }
 
-    pub fn with_formats(
+    pub fn with_formats<'formats>(
         &self,
-        attachment_texture_format: wgpu::TextureFormat,
+        attachment_texture_formats: &'formats [wgpu::TextureFormat],
         depth_stencil_attachment_format: Option<wgpu::TextureFormat>,
-    ) -> DeviceWithFormats {
+    ) -> DeviceWithFormats<'_, 'formats> {
         DeviceWithFormats {
             device: self,
-            attachment_texture_format,
+            attachment_texture_formats,
             depth_stencil_attachment_format,
         }
     }
@@ -567,13 +586,13 @@ impl Device {
     }
 }
 
-pub struct DeviceWithFormats<'a> {
-    pub device: &'a Device,
-    attachment_texture_format: wgpu::TextureFormat,
+pub struct DeviceWithFormats<'dev, 'formats> {
+    pub device: &'dev Device,
+    attachment_texture_formats: &'formats [wgpu::TextureFormat],
     depth_stencil_attachment_format: Option<wgpu::TextureFormat>,
 }
 
-impl<'a> DeviceWithFormats<'a> {
+impl<'dev, 'formats> DeviceWithFormats<'dev, 'formats> {
     pub fn get_pipeline(
         &self,
         name: &'static str,
@@ -581,14 +600,14 @@ impl<'a> DeviceWithFormats<'a> {
         fragment_shader: &ReloadableShader,
         render_pipeline_desc: RenderPipelineDesc,
         buffer_layout: &[VertexBufferLayout],
-    ) -> &'a RenderPipeline {
+    ) -> &'dev RenderPipeline {
         self.device.get_pipeline(
             name,
             vertex_shader,
             fragment_shader,
             render_pipeline_desc,
             buffer_layout,
-            self.attachment_texture_format,
+            self.attachment_texture_formats,
             self.depth_stencil_attachment_format,
         )
     }
@@ -598,7 +617,7 @@ impl<'a> DeviceWithFormats<'a> {
         name: &'static str,
         pipeline: &RenderPipeline,
         binding_resources: &[BindingResource],
-    ) -> &'a wgpu::BindGroup {
+    ) -> &'dev wgpu::BindGroup {
         let ids: Vec<_> = binding_resources
             .iter()
             .map(|resource| resource.id())
