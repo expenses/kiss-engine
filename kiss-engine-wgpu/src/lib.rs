@@ -426,6 +426,10 @@ impl Device {
 
     #[cfg(target_arch = "wasm32")]
     pub fn get_shader(&self, filename: &'static str, bytes: &[u8]) -> &ReloadableShader {
+        self.get_shader_from_bytes(filename, bytes)
+    }
+
+    pub fn get_shader_from_bytes(&self, filename: &'static str, bytes: &[u8]) -> &ReloadableShader {
         self.shaders.get_or_insert_with(filename, || {
             let shader = Arc::new(ReloadableShader {
                 shader: parking_lot::Mutex::new(Shader::load(&self.inner, filename, &bytes)),

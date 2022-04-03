@@ -222,12 +222,14 @@ fn main() {
 
         let pipeline = device.get_pipeline(
             "bake pipeline",
-            device
-                .device
-                .get_shader("shaders/compiled/bake_height_map.vert.spv"),
-            device
-                .device
-                .get_shader("shaders/compiled/bake_height_map.frag.spv"),
+            device.device.get_shader_from_bytes(
+                "shaders/compiled/bake_height_map.vert.spv",
+                include_bytes!("../shaders/compiled/bake_height_map.vert.spv"),
+            ),
+            device.device.get_shader_from_bytes(
+                "shaders/compiled/bake_height_map.frag.spv",
+                include_bytes!("../shaders/compiled/bake_height_map.frag.spv"),
+            ),
             RenderPipelineDesc {
                 primitive: wgpu::PrimitiveState::default(),
                 ..Default::default()
@@ -755,8 +757,14 @@ fn main() {
 
                 let pipeline = device.get_pipeline(
                     "plane pipeline",
-                    device.device.get_shader("shaders/compiled/plane.vert.spv"),
-                    device.device.get_shader("shaders/compiled/plane.frag.spv"),
+                    device.device.get_shader_from_bytes(
+                        "shaders/compiled/plane.vert.spv",
+                        include_bytes!("../shaders/compiled/plane.vert.spv"),
+                    ),
+                    device.device.get_shader_from_bytes(
+                        "shaders/compiled/plane.frag.spv",
+                        include_bytes!("../shaders/compiled/plane.frag.spv"),
+                    ),
                     RenderPipelineDesc {
                         ..Default::default()
                     },
@@ -808,10 +816,14 @@ fn main() {
 
                 let pipeline = device.get_pipeline(
                     "player pipeline",
-                    device
-                        .device
-                        .get_shader("shaders/compiled/capsule.vert.spv"),
-                    device.device.get_shader("shaders/compiled/tree.frag.spv"),
+                    device.device.get_shader_from_bytes(
+                        "shaders/compiled/capsule.vert.spv",
+                        include_bytes!("../shaders/compiled/capsule.vert.spv"),
+                    ),
+                    device.device.get_shader_from_bytes(
+                        "shaders/compiled/tree.frag.spv",
+                        include_bytes!("../shaders/compiled/tree.frag.spv"),
+                    ),
                     RenderPipelineDesc {
                         ..Default::default()
                     },
@@ -870,10 +882,14 @@ fn main() {
 
                 let pipeline = device.get_pipeline(
                     "meteor pipeline",
-                    device.device.get_shader("shaders/compiled/meteor.vert.spv"),
-                    device
-                        .device
-                        .get_shader("shaders/compiled/bounce_sphere.frag.spv"),
+                    device.device.get_shader_from_bytes(
+                        "shaders/compiled/meteor.vert.spv",
+                        include_bytes!("../shaders/compiled/meteor.vert.spv"),
+                    ),
+                    device.device.get_shader_from_bytes(
+                        "shaders/compiled/bounce_sphere.frag.spv",
+                        include_bytes!("../shaders/compiled/bounce_sphere.frag.spv"),
+                    ),
                     RenderPipelineDesc {
                         ..Default::default()
                     },
@@ -913,8 +929,14 @@ fn main() {
                 {
                     let pipeline = device.get_pipeline(
                         "trees pipeline",
-                        device.device.get_shader("shaders/compiled/tree.vert.spv"),
-                        device.device.get_shader("shaders/compiled/tree.frag.spv"),
+                        device.device.get_shader_from_bytes(
+                            "shaders/compiled/tree.vert.spv",
+                            include_bytes!("../shaders/compiled/tree.vert.spv"),
+                        ),
+                        device.device.get_shader_from_bytes(
+                            "shaders/compiled/tree.frag.spv",
+                            include_bytes!("../shaders/compiled/tree.frag.spv"),
+                        ),
                         RenderPipelineDesc {
                             ..Default::default()
                         },
@@ -968,8 +990,14 @@ fn main() {
                 {
                     let pipeline = device.get_pipeline(
                         "house pipeline",
-                        device.device.get_shader("shaders/compiled/house.vert.spv"),
-                        device.device.get_shader("shaders/compiled/tree.frag.spv"),
+                        device.device.get_shader_from_bytes(
+                            "shaders/compiled/house.vert.spv",
+                            include_bytes!("../shaders/compiled/house.vert.spv"),
+                        ),
+                        device.device.get_shader_from_bytes(
+                            "shaders/compiled/tree.frag.spv",
+                            include_bytes!("../shaders/compiled/tree.frag.spv"),
+                        ),
                         RenderPipelineDesc {
                             ..Default::default()
                         },
@@ -1023,8 +1051,14 @@ fn main() {
 
                 let pipeline = device.get_pipeline(
                     "water pipeline",
-                    device.device.get_shader("shaders/compiled/plane.vert.spv"),
-                    device.device.get_shader("shaders/compiled/water.frag.spv"),
+                    device.device.get_shader_from_bytes(
+                        "shaders/compiled/plane.vert.spv",
+                        include_bytes!("../shaders/compiled/plane.vert.spv"),
+                    ),
+                    device.device.get_shader_from_bytes(
+                        "shaders/compiled/water.frag.spv",
+                        include_bytes!("../shaders/compiled/water.frag.spv"),
+                    ),
                     RenderPipelineDesc {
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         ..Default::default()
@@ -1067,12 +1101,14 @@ fn main() {
 
                 let pipeline = device.get_pipeline(
                     "bounce sphere pipeline",
-                    device
-                        .device
-                        .get_shader("shaders/compiled/bounce_sphere.vert.spv"),
-                    device
-                        .device
-                        .get_shader("shaders/compiled/bounce_sphere.frag.spv"),
+                    device.device.get_shader_from_bytes(
+                        "shaders/compiled/bounce_sphere.vert.spv",
+                        include_bytes!("../shaders/compiled/bounce_sphere.vert.spv"),
+                    ),
+                    device.device.get_shader_from_bytes(
+                        "shaders/compiled/bounce_sphere.frag.spv",
+                        include_bytes!("../shaders/compiled/bounce_sphere.frag.spv"),
+                    ),
                     RenderPipelineDesc {
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
 
@@ -1120,7 +1156,7 @@ fn main() {
                     bounds: (config.width as f32, config.height as f32),
                     text: vec![wgpu_glyph::Text::new(&format!("Bounces: {}", bounces))
                         .with_color([0.0, 0.0, 0.0, 1.0])
-                        .with_scale(64.0)],
+                        .with_scale(24.0 * window.scale_factor() as f32)],
                     ..wgpu_glyph::Section::default()
                 });
 
@@ -1130,7 +1166,7 @@ fn main() {
                         bounds: (config.width as f32, config.height as f32),
                         text: vec![wgpu_glyph::Text::new("Death\n死")
                             .with_color([0.75, 0.0, 0.0, 1.0])
-                            .with_scale(196.0)],
+                            .with_scale(96.0 * window.scale_factor() as f32)],
                         layout: wgpu_glyph::Layout::Wrap {
                             line_breaker: Default::default(),
                             h_align: wgpu_glyph::HorizontalAlign::Center,
