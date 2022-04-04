@@ -1,7 +1,7 @@
 #include "common.h"
 
 [[vk::binding(0)]] cbuffer _ {
-    row_major float4x4 matrices;
+    float4x4 matrices;
     float3 player_position;
     float player_facing;
     float3 camera_position;
@@ -18,18 +18,18 @@
 };
 
 struct In {
-    float2 uv;
-    float3 normal;
-    float3 position;
+    float2 uv: TEXCOORD0;
+    float3 normal: TEXCOORD1;
+    float3 position: TEXCOORD2;
     float4 coord: SV_Position;
 };
 
-float4 main(In input) {
+float4 main(In input): SV_Target0 {
     float height = depth_map_tex.SampleLevel(tex_sampler, input.uv, 0).r;
 
     // Compute light attenuation using Beer's law.
 
-    float3 transmitted_light = opaque_tex.Sample(tex_sampler, input.coord.xy / window_size);
+    float3 transmitted_light = opaque_tex.Sample(tex_sampler, input.coord.xy / window_size).xyz;
 
     float attenuation_distance = 0.5;
     float transmission_distance = abs(-height);

@@ -13,14 +13,14 @@
 [[vk::binding(8)]] Texture2D<float> forest_map_tex;
 
 struct In {
-    float2 uv;
-    float3 normal;
-    float3 position;
+    float2 uv: TEXCOORD0;
+    float3 normal: TEXCOORD1;
+    float3 position: TEXCOORD2;
 };
 
 struct Out {
-    float4 color;
-    float4 opaque_color;
+    float4 color: SV_Target0;
+    float4 opaque_color: SV_Target1;
 };
 
 Out main(In input) {
@@ -41,7 +41,7 @@ Out main(In input) {
 
     float3 terrain = lerp(greenery, rock, smoothstep(4.0, 5.0, input.position.y));
     terrain = lerp(shore, terrain, smoothstep(0.1, 0.4, input.position.y));
-    terrain = lerp(terrain, float3(1.0), smoothstep(7.0, 7.5, input.position.y));
+    terrain = lerp(terrain, 1.0, smoothstep(7.0, 7.5, input.position.y));
     float3 color = terrain * diffuse;
 
     color *= shadow_factor(input.position, meteor_position);

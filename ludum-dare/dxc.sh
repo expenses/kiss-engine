@@ -1,0 +1,1 @@
+ ~/projects/DirectXShaderCompiler/build/bin/dxc -HV 2021 -spirv -WX $@

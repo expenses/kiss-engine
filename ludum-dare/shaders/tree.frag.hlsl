@@ -2,14 +2,14 @@
 #include "common.h"
 
 struct In {
-    float3 normal;
-    float2 uv;
-    float3 position;
+    float3 normal: TEXCOORD0;
+    float2 uv: TEXCOORD1;
+    float3 position: TEXCOORD2;
 };
 
 struct Out {
-    float4 color;
-    float4 opaque_color;
+    float4 color: SV_Target0;
+    float4 opaque_color: SV_Target1;
 };
 
 [[vk::binding(1)]] cbuffer _ {

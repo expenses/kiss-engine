@@ -1,13 +1,13 @@
 #include "common.h"
 
 struct In {
-    float3 normal;
-    float3 dir_to_camera;
+    float3 normal: TEXCOORD0;
+    float3 dir_to_camera: TEXCOORD1;
 };
 
 struct Out {
-    float4 color;
-    float4 opaque_color;
+    float4 color: SV_Target0;
+    float4 opaque_color: SV_Target1;
 };
 
 [[vk::binding(1)]] cbuffer _ {
