@@ -1,12 +1,10 @@
-use crate::Similarity;
 use glam::Mat4;
-use glam::Quat;
 use glam::Vec2;
 use glam::Vec3;
 use kiss_engine_wgpu::{Device, Resource, Texture};
 use wgpu::util::DeviceExt;
 
-use crate::animation;
+use gltf_helpers::{NodeTree, animation};
 
 pub(crate) struct Model {
     positions: wgpu::Buffer,
@@ -173,72 +171,6 @@ impl Model {
         render_pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
 
         render_pass.draw_indexed(0..self.num_indices, 0, 0..num_instances);
-    }
-}
-
-struct NodeTree {
-    inner: Vec<(Similarity, usize)>,
-}
-
-impl NodeTree {
-    fn new(nodes: gltf::iter::Nodes) -> Self {
-        let mut inner = vec![(Similarity::IDENTITY, usize::max_value()); nodes.clone().count()];
-
-        for node in nodes {
-            let (translation, rotation, scale) = node.transform().decomposed();
-
-            assert!(
-                (scale[0] - scale[1]).abs() <= std::f32::EPSILON * 10.0,
-                "{:?}",
-                scale
-            );
-            assert!(
-                (scale[0] - scale[2]).abs() <= std::f32::EPSILON * 10.0,
-                "{:?}",
-                scale
-            );
-
-            inner[node.index()].0 = Similarity {
-                translation: translation.into(),
-                rotation: Quat::from_array(rotation),
-                scale: scale[0],
-            };
-            for child in node.children() {
-                inner[child.index()].1 = node.index();
-            }
-        }
-
-        Self { inner }
-    }
-
-    pub(crate) fn transform_of(&self, mut index: usize) -> Similarity {
-        let mut transform_sum = Similarity::IDENTITY;
-
-        while index != usize::max_value() {
-            let (transform, parent_index) = self.inner[index];
-            transform_sum = transform * transform_sum;
-            index = parent_index;
-        }
-
-        transform_sum
-    }
-
-    // It turns out that we can just reverse the array to iter through nodes depth first! Useful for applying animations.
-    fn iter_depth_first(&self) -> impl Iterator<Item = (usize, Option<usize>)> + '_ {
-        self.inner
-            .iter()
-            .enumerate()
-            .rev()
-            .map(|(index, &(_, parent))| {
-                (
-                    index,
-                    if parent != usize::max_value() {
-                        Some(parent)
-                    } else {
-                        None
-                    },
-                )
-            })
     }
 }
 

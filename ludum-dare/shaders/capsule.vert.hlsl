@@ -1,9 +1,7 @@
 #include "common.h"
 
 [[vk::binding(0)]] cbuffer _ {
-    float4x4 matrices;
-    float3 player_position;
-    float player_facing;
+    Uniforms uniforms;
 };
 
 struct In {
@@ -34,11 +32,11 @@ Out main(In input) {
 		input.weights.z * joint_transforms[input.joints.z] +
 		input.weights.w * joint_transforms[input.joints.w];
 
-    float3x3 rot = rotation_matrix_y(player_facing);
+    float3x3 rot = rotation_matrix_y(uniforms.player_facing);
 
-    float3 final_position = player_position + mul(rot, mul(skin, float4(input.pos, 1.0)).xyz);
+    float3 final_position = uniforms.player_position + mul(rot, mul(skin, float4(input.pos, 1.0)).xyz);
 
-    output.vertex_position = mul(matrices, float4(final_position, 1.0));
+    output.vertex_position = mul(uniforms.matrices, float4(final_position, 1.0));
     output.uv = input.uv;
     output.normal = mul(rot, input.normal);
     output.position = final_position;

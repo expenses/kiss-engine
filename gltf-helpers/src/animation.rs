@@ -4,7 +4,7 @@ use gltf::animation::Interpolation;
 use std::fmt;
 use std::ops::{Add, Mul};
 
-pub(crate) fn read_animations(
+pub fn read_animations(
     animations: gltf::iter::Animations,
     gltf_binary_buffer_blob: &[u8],
     model_name: &str,
@@ -115,13 +115,16 @@ pub(crate) fn read_animations(
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct AnimationJoints {
+pub struct AnimationJoints {
     global_transforms: Vec<Similarity>,
     local_transforms: Vec<Similarity>,
 }
 
 impl AnimationJoints {
-    pub(crate) fn new(nodes: gltf::iter::Nodes, depth_first_nodes: &[(usize, Option<usize>)]) -> Self {
+    pub fn new(
+        nodes: gltf::iter::Nodes,
+        depth_first_nodes: &[(usize, Option<usize>)],
+    ) -> Self {
         let joint_similarities: Vec<_> = nodes
             .map(|node| {
                 let (translation, rotation, scale) = node.transform().decomposed();
@@ -146,7 +149,7 @@ impl AnimationJoints {
         joints
     }
 
-    pub(crate) fn iter<'a>(
+    pub fn iter<'a>(
         &'a self,
         joint_indices_to_node_indices: &'a [usize],
         inverse_bind_matrices: &'a [Mat4],
@@ -252,7 +255,7 @@ impl<T: Interpolate> Channel<T> {
 }
 
 #[derive(Debug)]
-pub(crate) struct Animation {
+pub struct Animation {
     total_time: f32,
     translation_channels: Vec<Channel<Vec3>>,
     rotation_channels: Vec<Channel<Quat>>,
@@ -260,11 +263,11 @@ pub(crate) struct Animation {
 }
 
 impl Animation {
-    pub(crate) fn total_time(&self) -> f32 {
+    pub fn total_time(&self) -> f32 {
         self.total_time
     }
 
-    pub(crate) fn animate(
+    pub fn animate(
         &self,
         animation_joints: &mut AnimationJoints,
         time: f32,

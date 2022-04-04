@@ -1,8 +1,7 @@
+#include "common.h"
+
 [[vk::binding(0)]] cbuffer _ {
-    float4x4 matrices;
-    float3 player_position;
-    float player_facing;
-    float3 camera_position;
+    Uniforms uniforms;
 };
 
 [[vk::binding(1)]] cbuffer _ {
@@ -27,9 +26,9 @@ Out main(In input) {
 
     float3 final_position = position + (scale * input.pos);
 
-    output.position = mul(matrices, float4(final_position, 1.0));
+    output.position = mul(uniforms.matrices, float4(final_position, 1.0));
     output.normal = input.normal;
-    output.dir_to_camera = camera_position - final_position;
+    output.dir_to_camera = uniforms.camera_position - final_position;
 
     return output;
 }

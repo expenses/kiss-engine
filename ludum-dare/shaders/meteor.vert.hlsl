@@ -1,11 +1,7 @@
 #include "common.h"
 
 [[vk::binding(0)]] cbuffer _ {
-    float4x4 matrices;
-    float3 player_position;
-    float player_facing;
-    float3 camera_position;
-    float time;
+    Uniforms uniforms;
 };
 
 [[vk::binding(1)]] cbuffer _ {
@@ -29,12 +25,12 @@ struct Out {
 Out main(In input) {
     Out output;
 
-    float rotation_time = time * 0.5;
+    float rotation_time = uniforms.time * 0.5;
     float3x3 rot = rotation_matrix_y(rotation_time) * rotation_matrix_x(rotation_time) * rotation_matrix_z(rotation_time);
 
     float3 final_position = position + mul(rot, input.pos);
 
-    output.vertex_position = mul(matrices, float4(final_position, 1.0));
+    output.vertex_position = mul(uniforms.matrices, float4(final_position, 1.0));
     output.normal = input.normal;
     output.uv = input.uv;
     output.position = final_position;

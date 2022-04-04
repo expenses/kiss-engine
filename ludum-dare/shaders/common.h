@@ -43,3 +43,12 @@ float3x3 rotation_matrix_z(float theta) {
         0, 0, 1
     );
 }
+
+struct Uniforms {
+    float4x4 matrices;
+    float3 player_position;
+    float player_facing;
+    float3 camera_position;
+    float time;
+    float2 window_size;
+};

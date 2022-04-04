@@ -1,12 +1,7 @@
 #include "common.h"
 
 [[vk::binding(0)]] cbuffer _ {
-    float4x4 matrices;
-    float3 player_position;
-    float player_facing;
-    float3 camera_position;
-    float time;
-    float2 window_size;
+    Uniforms uniforms;
 };
 
 [[vk::binding(1)]] Texture2D<float4> opaque_tex;
@@ -29,7 +24,7 @@ float4 main(In input): SV_Target0 {
 
     // Compute light attenuation using Beer's law.
 
-    float3 transmitted_light = opaque_tex.Sample(tex_sampler, input.coord.xy / window_size).xyz;
+    float3 transmitted_light = opaque_tex.Sample(tex_sampler, input.coord.xy / uniforms.window_size).xyz;
 
     float attenuation_distance = 0.5;
     float transmission_distance = abs(-height);

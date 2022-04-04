@@ -1,6 +1,7 @@
+#include "common.h"
+
 [[vk::binding(0)]] cbuffer _ {
-    float4x4 matrices;
-    float2 player_position;
+    Uniforms uniforms;
 };
 
 struct In {
@@ -19,7 +20,7 @@ struct Out {
 Out main(In input) {
     Out output;
 
-    output.vertex_position = mul(matrices, float4(input.pos, 1.0));
+    output.vertex_position = mul(uniforms.matrices, float4(input.pos, 1.0));
     output.position = input.pos;
     output.uv = input.uv;
     output.normal = input.normal;

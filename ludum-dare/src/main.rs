@@ -1,4 +1,3 @@
-use glam::Mat3;
 use glam::Mat4;
 use glam::Quat;
 use glam::Vec2;
@@ -8,9 +7,7 @@ use kiss_engine_wgpu::{
     BindGroupLayoutSettings, BindingResource, Device, RenderPipelineDesc, VertexBufferLayout,
 };
 use rand::Rng;
-use std::ops::*;
 
-mod animation;
 mod assets;
 
 use assets::{load_image, Model};
@@ -1212,48 +1209,6 @@ pub(crate) struct MeteorProps {
 pub(crate) struct MeteorGpuProps {
     pub(crate) position: Vec3,
     pub(crate) _padding: u32,
-}
-
-#[derive(Clone, Copy, Debug)]
-#[repr(C)]
-pub(crate) struct Similarity {
-    pub(crate) translation: Vec3,
-    pub(crate) scale: f32,
-    pub(crate) rotation: Quat,
-}
-
-impl Similarity {
-    pub(crate) const IDENTITY: Self = Self {
-        translation: Vec3::ZERO,
-        scale: 1.0,
-        rotation: Quat::IDENTITY,
-    };
-
-    pub(crate) fn as_mat4(self) -> Mat4 {
-        Mat4::from_translation(self.translation)
-            * Mat4::from_mat3(Mat3::from_quat(self.rotation))
-            * Mat4::from_scale(Vec3::splat(self.scale))
-    }
-}
-
-impl Mul<Similarity> for Similarity {
-    type Output = Self;
-
-    fn mul(self, child: Self) -> Self {
-        Self {
-            translation: self * child.translation,
-            rotation: self.rotation * child.rotation,
-            scale: self.scale * child.scale,
-        }
-    }
-}
-
-impl Mul<Vec3> for Similarity {
-    type Output = Vec3;
-
-    fn mul(self, vector: Vec3) -> Vec3 {
-        self.translation + (self.scale * (self.rotation * vector))
-    }
 }
 
 pub(crate) struct Orbit {
