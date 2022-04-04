@@ -2,15 +2,14 @@
 #include "common.h"
 
 struct In {
-    [[vk::location(0)]] float3 normal: TEXCOORD0;
-    [[vk::location(1)]] float2 uv: TEXCOORD1;
-    [[vk::location(2)]] float3 position: TEXCOORD2;
-
+    float3 normal;
+    float2 uv;
+    float3 position;
 };
 
 struct Out {
-    float4 color: SV_TARGET0;
-    float4 color2: SV_TARGET1;
+    float4 color;
+    float4 opaque_color;
 };
 
 [[vk::binding(1)]] cbuffer _ {
@@ -30,7 +29,7 @@ Out main(In input) {
     color *= shadow_factor(input.position, meteor_position);
 
     output.color = float4(color, 1.0);
-    output.color2 = output.color;
+    output.opaque_color = output.color;
 
 
     return output;

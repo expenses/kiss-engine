@@ -18,19 +18,13 @@
 };
 
 struct In {
-    [[vk::location(0)]] float2 uv: TEXCOORD0;
-    [[vk::location(1)]] float3 normal: TEXCOORD1;
-    [[vk::location(2)]] float3 position: TEXCOORD2;
+    float2 uv;
+    float3 normal;
+    float3 position;
     float4 coord: SV_Position;
 };
 
-struct Out {
-    float4 color: SV_TARGET0;
-};
-
-Out main(In input) {
-    Out output;
-
+float4 main(In input) {
     float height = depth_map_tex.SampleLevel(tex_sampler, input.uv, 0).r;
 
     // Compute light attenuation using Beer's law.
@@ -47,7 +41,5 @@ Out main(In input) {
 
     float3 transmittance = exp(-attenuation_coefficient * transmission_distance);
 
-    output.color = float4(transmitted_light * transmittance, 1.0);
-
-    return output;
+    return float4(transmitted_light * transmittance, 1.0);
 }

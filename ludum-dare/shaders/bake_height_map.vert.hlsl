@@ -1,12 +1,12 @@
 struct In {
-    [[vk::location(0)]] float3 pos: TEXCOORD0;
-    [[vk::location(1)]] float3 normal: TEXCOORD1;
-    [[vk::location(2)]] float3 uv: TEXCOORD2;
+    float3 pos;
+    float3 normal;
+    float3 uv;
 };
 
 struct Out {
     float4 position: SV_Position;
-    [[vk::location(0)]] float height: TEXCOORD0;
+    float height;
 };
 
 Out main(In input) {

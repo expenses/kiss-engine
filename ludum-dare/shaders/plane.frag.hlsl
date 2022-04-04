@@ -12,17 +12,15 @@
 [[vk::binding(7)]] Texture2D<float3> forest_tex;
 [[vk::binding(8)]] Texture2D<float> forest_map_tex;
 
-
 struct In {
-    [[vk::location(0)]] float2 uv: TEXCOORD0;
-    [[vk::location(1)]] float3 normal: TEXCOORD1;
-    [[vk::location(2)]] float3 position: TEXCOORD2;
+    float2 uv;
+    float3 normal;
+    float3 position;
 };
 
-
 struct Out {
-    float4 color: SV_TARGET0;
-    float4 color2: SV_TARGET1;
+    float4 color;
+    float4 opaque_color;
 };
 
 Out main(In input) {
@@ -49,7 +47,7 @@ Out main(In input) {
     color *= shadow_factor(input.position, meteor_position);
 
     output.color = float4(color, 1.0);
-    output.color2 = float4(color, 1.0);
+    output.opaque_color = float4(color, 1.0);
 
     return output;
 }

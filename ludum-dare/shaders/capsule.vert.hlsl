@@ -7,45 +7,41 @@
 };
 
 struct In {
-    [[vk::location(0)]] float3 pos: TEXCOORD0;
-    [[vk::location(1)]] float3 normal: TEXCOORD1;
-    [[vk::location(2)]] float2 uv: TEXCOORD2;
-    [[vk::location(3)]] uint4 joints: TEXCOORD3;
-    [[vk::location(4)]] float4 weights: TEXCOORD4;
+    float3 pos;
+    float3 normal;
+    float2 uv;
+    uint4 joints;
+    float4 weights;
 };
 
 struct Out {
-    float4 position: SV_Position;
-    [[vk::location(0)]] float3 normal: TEXCOORD1;
-    [[vk::location(1)]] float2 uv: TEXCOORD0;
-    [[vk::location(2)]] float3 position2: TEXCOORD2;
-};
-
-struct JointTransform {
-    row_major float4x4 inner;
+    float4 vertex_position: SV_Position;
+    float3 normal;
+    float2 uv;
+    float3 position;
 };
 
 [[vk::binding(4)]] cbuffer _ {
-    JointTransform joint_transforms[10];
+    row_major float4x4 joint_transforms[10];
 };
 
 Out main(In input) {
     Out output;
 
     float4x4 skin =
-		input.weights.x * joint_transforms[input.joints.x].inner +
-		input.weights.y * joint_transforms[input.joints.y].inner +
-		input.weights.z * joint_transforms[input.joints.z].inner +
-		input.weights.w * joint_transforms[input.joints.w].inner;
+		input.weights.x * joint_transforms[input.joints.x] +
+		input.weights.y * joint_transforms[input.joints.y] +
+		input.weights.z * joint_transforms[input.joints.z] +
+		input.weights.w * joint_transforms[input.joints.w];
 
     float3x3 rot = rotation_matrix_y(-player_facing);
 
     float3 final_position = player_position + (rot * (skin * float4(input.pos, 1.0)).xyz);
 
-    output.position = (matrices) * float4(final_position, 1.0);
+    output.vertex_position = matrices * float4(final_position, 1.0);
     output.uv = input.uv;
     output.normal = rot * input.normal;
-    output.position2 = final_position;
+    output.position = final_position;
 
     return output;
 }
