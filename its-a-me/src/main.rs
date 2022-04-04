@@ -163,7 +163,7 @@ fn main() {
         let max_density = densities
             .iter()
             .copied()
-            .max_by(|a, b| a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal))
+            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
             .unwrap_or(0.0);
 
         use rand::Rng;
@@ -287,7 +287,10 @@ fn main() {
             texture.data,
         );
 
-        device.create_resource(texture.create_view(&wgpu::TextureViewDescriptor::default()))
+        device.create_resource(kiss_engine_wgpu::Texture {
+            view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
+            texture,
+        })
     };
 
     let uniform_buffer = device.create_resource(device.inner.create_buffer_init(
@@ -487,7 +490,7 @@ fn main() {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main render pass"),
                 color_attachments: &[wgpu::RenderPassColorAttachment {
-                    view: &hdr_texture,
+                    view: &hdr_texture.view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -500,7 +503,7 @@ fn main() {
                     },
                 }],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &depth_texture,
+                    view: &depth_texture.view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(0.0),
                         store: true,
@@ -511,7 +514,7 @@ fn main() {
 
             {
                 let device = device.with_formats(
-                    wgpu::TextureFormat::Rgba16Float,
+                    &[wgpu::TextureFormat::Rgba16Float],
                     Some(wgpu::TextureFormat::Depth32Float),
                 );
 
@@ -563,12 +566,13 @@ fn main() {
             });
 
             {
-                let device = device.with_formats(swapchain_format, None);
+                let formats = &[swapchain_format];
+                let device = device.with_formats(formats, None);
 
                 let pipeline = device.get_pipeline(
                     "blit pipeline",
-                    device.device.get_shader("shaders/full_screen_tri.vert.spv"),
-                    device.device.get_shader("shaders/blit.frag.spv"),
+                    device.device.get_shader("shaders/full_screen_tri.vert.spv", Default::default()),
+                    device.device.get_shader("shaders/blit.frag.spv", Default::default()),
                     RenderPipelineDesc::default(),
                     &[],
                 );
@@ -577,7 +581,7 @@ fn main() {
                     pipeline,
                     &[
                         BindingResource::Sampler(&sampler),
-                        BindingResource::Texture(&hdr_texture),
+                        BindingResource::Texture(hdr_texture),
                     ],
                 );
 
@@ -735,12 +739,12 @@ impl ResizingBuffer {
 }
 
 fn render_mario<'a>(
-    device: &DeviceWithFormats<'a>,
+    device: &DeviceWithFormats<'a, 'a>,
     render_pass: &mut wgpu::RenderPass<'a>,
     mario_buffers: &'a MarioBuffers,
     uniform_buffer: &Resource<wgpu::Buffer>,
     sampler: &Resource<wgpu::Sampler>,
-    texture: &Resource<wgpu::TextureView>,
+    texture: &Resource<kiss_engine_wgpu::Texture>,
     nega_mario: bool,
 ) {
     let buffer_layout = &[
@@ -775,8 +779,8 @@ fn render_mario<'a>(
     if nega_mario {
         let pipeline = device.get_pipeline(
             "nega mario pipeline",
-            device.device.get_shader("shaders/mario.vert.spv"),
-            device.device.get_shader("shaders/nega_mario.frag.spv"),
+            device.device.get_shader("shaders/mario.vert.spv", Default::default()),
+            device.device.get_shader("shaders/nega_mario.frag.spv", Default::default()),
             RenderPipelineDesc::default(),
             buffer_layout,
         );
@@ -788,8 +792,8 @@ fn render_mario<'a>(
     } else {
         let pipeline = device.get_pipeline(
             "mario pipeline",
-            device.device.get_shader("shaders/mario.vert.spv"),
-            device.device.get_shader("shaders/mario.frag.spv"),
+            device.device.get_shader("shaders/mario.vert.spv", Default::default()),
+            device.device.get_shader("shaders/mario.frag.spv", Default::default()),
             RenderPipelineDesc::default(),
             buffer_layout,
         );
@@ -811,7 +815,7 @@ fn render_mario<'a>(
 }
 
 fn render_world<'a>(
-    device: &DeviceWithFormats<'a>,
+    device: &DeviceWithFormats<'a, 'a>,
     render_pass: &mut wgpu::RenderPass<'a>,
     uniform_buffer: &'a Resource<wgpu::Buffer>,
     buffer: &'a wgpu::Buffer,
@@ -819,8 +823,8 @@ fn render_world<'a>(
 ) {
     let pipeline = device.get_pipeline(
         "world pipeline",
-        device.device.get_shader("shaders/world.vert.spv"),
-        device.device.get_shader("shaders/world.frag.spv"),
+        device.device.get_shader("shaders/world.vert.spv", Default::default()),
+        device.device.get_shader("shaders/world.frag.spv", Default::default()),
         RenderPipelineDesc::default(),
         &[
             VertexBufferLayout {
@@ -850,7 +854,7 @@ fn render_world<'a>(
 }
 
 fn render_grass<'a>(
-    device: &DeviceWithFormats<'a>,
+    device: &DeviceWithFormats<'a, 'a>,
     render_pass: &mut wgpu::RenderPass<'a>,
     uniform_buffer: &'a Resource<wgpu::Buffer>,
     buffer: &'a wgpu::Buffer,
@@ -858,8 +862,8 @@ fn render_grass<'a>(
 ) {
     let pipeline = device.get_pipeline(
         "grass pipeline",
-        device.device.get_shader("shaders/point.vert.spv"),
-        device.device.get_shader("shaders/flat_colour.frag.spv"),
+        device.device.get_shader("shaders/point.vert.spv", Default::default()),
+        device.device.get_shader("shaders/flat_colour.frag.spv", Default::default()),
         RenderPipelineDesc {
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::LineList,

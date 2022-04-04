@@ -8,7 +8,7 @@ gilrs = "0.8.2"
 glam = { version = "0.20.2", features = ["bytemuck"] }
 kiss-engine-wgpu = { path = "../kiss-engine-wgpu" }
 parking_lot = "0.12.0"
-wgpu = { git = "https://github.com/gfx-rs/wgpu" }
+wgpu = "0.12.0"
 libsm64 = { git = "https://github.com/nickmass/libsm64-rust"  }
 winit = "0.26.1"
 dolly = "0.2.0"

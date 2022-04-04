@@ -180,7 +180,7 @@ async fn run() {
                     },
                 }],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: depth_buffer,
+                    view: &depth_buffer.view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(0.0),
                         store: true,
@@ -190,8 +190,9 @@ async fn run() {
             });
 
             {
+                let formats = &[config.format];
                 let device =
-                    device.with_formats(config.format, Some(wgpu::TextureFormat::Depth32Float));
+                    device.with_formats(formats, Some(wgpu::TextureFormat::Depth32Float));
 
                 let pipeline = device.get_pipeline(
                     "blit pipeline",
@@ -199,11 +200,13 @@ async fn run() {
                         "vert.hlsl.spv",
                         #[cfg(target_arch = "wasm32")]
                         include_bytes!("../vert.hlsl.spv"),
+                        Default::default(),
                     ),
                     device.device.get_shader(
                         "frag.hlsl.spv",
                         #[cfg(target_arch = "wasm32")]
                         include_bytes!("../frag.hlsl.spv"),
+                        Default::default(),
                     ),
                     RenderPipelineDesc {
                         depth_compare: wgpu::CompareFunction::Always,

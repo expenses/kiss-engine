@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 pollster = "0.2.5"
-wgpu = { git = "https://github.com/gfx-rs/wgpu" }
+wgpu = "0.12.0"
 winit = "0.26.1"
 kiss-engine-wgpu = { path = "../kiss-engine-wgpu" }
 log = "0.4.16"
