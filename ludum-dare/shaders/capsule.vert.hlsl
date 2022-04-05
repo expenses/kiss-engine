@@ -38,7 +38,7 @@ Out main(In input) {
 
     output.vertex_position = mul(uniforms.matrices, float4(final_position, 1.0));
     output.uv = input.uv;
-    output.normal = rot * input.normal;
+    output.normal = rot * skin.rotation * input.normal;
     output.position = final_position;
 
     return output;

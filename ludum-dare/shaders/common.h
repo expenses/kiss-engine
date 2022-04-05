@@ -11,57 +11,6 @@ float shadow_factor(float3 position, float3 meteor_position) {
     return max(smoothstep(shadow_scale * 0.9, shadow_scale * 1.1, distance(pos_2d, meteor_pos_2d)), ambient);
 }
 
-float3x3 rotation_matrix_y(float theta) {
-    float cosine = cos(theta);
-    float sine = sin(theta);
-
-    return float3x3(
-        cosine, 0, sine,
-        0, 1, 0,
-        -sine, 0, cosine
-    );
-}
-
-float3x3 rotation_matrix_x(float theta) {
-    float cosine = cos(theta);
-    float sine = sin(theta);
-
-    return float3x3(
-        1, 0, 0,
-        0, cosine, -sine,
-        0, sine, cosine
-    );
-}
-
-float3x3 rotation_matrix_z(float theta) {
-    float cosine = cos(theta);
-    float sine = sin(theta);
-
-    return float3x3(
-        cosine, -sine, 0,
-        sine, cosine, 0,
-        0, 0, 1
-    );
-}
-
-float4x4 scale_matrix(float scale) {
-    return float4x4(
-        float4(scale, 0.0, 0.0, 0.0),
-        float4(0.0, scale, 0.0, 0.0),
-        float4(0.0, 0.0, scale, 0.0),
-        float4(0.0, 0.0, 0.0, 1.0)
-    );
-}
-
-float4x4 translation_matrix(float3 translation) {
-    return float4x4(
-        float4(1.0, 0.0, 0.0, 0.0),
-        float4(0.0, 1.0, 0.0, 0.0),
-        float4(0.0, 0.0, 1.0, 0.0),
-        float4(translation, 1.0)
-    );
-}
-
 struct Uniforms {
     float4x4 matrices;
     float3 player_position;
@@ -88,8 +37,16 @@ struct Quaternion {
         return output;
     }
 
+    static Quaternion from_rotation_x(float angle) {
+        return Quaternion::from(sin(angle * 0.5), 0, 0, cos(angle * 0.5));
+    }
+
     static Quaternion from_rotation_y(float angle) {
         return Quaternion::from(0, sin(angle * 0.5), 0, cos(angle * 0.5));
+    }
+
+    static Quaternion from_rotation_z(float angle) {
+        return Quaternion::from(0, 0, sin(angle * 0.5), cos(angle * 0.5));
     }
 
     Quaternion operator *(float scalar) {
@@ -127,20 +84,11 @@ struct Quaternion {
     // Adapted from:
     // https://github.com/bitshifter/glam-rs/blob/1b703518e7961f9f4e90f40d3969e24462585143/src/core/scalar/quaternion.rs#L69-L81
     Quaternion operator *(Quaternion other) {
-        float x0 = this.x;
-        float x1 = other.x;
-        float y0 = this.y;
-        float y1 = other.y;
-        float z0 = this.z;
-        float z1 = other.z;
-        float w0 = this.w;
-        float w1 = other.w;
-
         return Quaternion::from(
-            w0 * x1 + x0 * w1 + y0 * z1 - z0 * y1,
-            w0 * y1 - x0 * z1 + y0 * w1 + z0 * x1,
-            w0 * z1 + x0 * y1 - y0 * x1 + z0 * w1,
-            w0 * w1 - x0 * x1 - y0 * y1 - z0 * z1
+            this.w * other.x + this.x * other.w + this.y * other.z - this.z * other.y,
+            this.w * other.y - this.x * other.z + this.y * other.w + this.z * other.x,
+            this.w * other.z + this.x * other.y - this.y * other.x + this.z * other.w,
+            this.w * other.w - this.x * other.x - this.y * other.y - this.z * other.z
         );
     }
 };

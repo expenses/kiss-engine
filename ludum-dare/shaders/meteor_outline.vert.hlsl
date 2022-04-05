@@ -26,9 +26,9 @@ Out main(In input) {
 
     float scale = 1.2;
     float rotation_time = uniforms.time * 0.5;
-    float3x3 rot = rotation_matrix_y(rotation_time) * rotation_matrix_x(rotation_time) * rotation_matrix_z(rotation_time);
+    Quaternion rot = Quaternion::from_rotation_x(rotation_time) * Quaternion::from_rotation_y(rotation_time) * Quaternion::from_rotation_z(rotation_time);
 
-    float3 final_position = position + mul(rot, scale * input.pos);
+    float3 final_position = position + rot * scale * input.pos;
 
     output.vertex_position = mul(uniforms.matrices, float4(final_position, 1.0));
     output.normal = input.normal;

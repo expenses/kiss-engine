@@ -25,7 +25,7 @@ Out main(In input) {
     float3 instance_pos = input.instance_info.xyz;
     float instance_rotation = input.instance_info.w;
 
-    float3 final_position = instance_pos + mul(rotation_matrix_y(instance_rotation), scale * input.pos);
+    float3 final_position = instance_pos + Quaternion::from_rotation_y(instance_rotation) * scale * input.pos;
 
     output.vertex_position = mul(uniforms.matrices, float4(final_position, 1.0));
     output.normal = input.normal;
