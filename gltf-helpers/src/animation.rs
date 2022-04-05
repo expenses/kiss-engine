@@ -1,5 +1,5 @@
 use crate::Similarity;
-use glam::{Mat4, Quat, Vec3};
+use glam::{Quat, Vec3};
 use gltf::animation::Interpolation;
 use std::fmt;
 use std::ops::{Add, Mul};
@@ -152,13 +152,13 @@ impl AnimationJoints {
     pub fn iter<'a>(
         &'a self,
         joint_indices_to_node_indices: &'a [usize],
-        inverse_bind_matrices: &'a [Mat4],
-    ) -> impl Iterator<Item = Mat4> + 'a {
+        inverse_bind_transforms: &'a [Similarity],
+    ) -> impl Iterator<Item = Similarity> + 'a {
         joint_indices_to_node_indices
             .iter()
             .enumerate()
             .map(move |(joint_index, &node_index)| {
-                self.global_transforms[node_index].as_mat4() * inverse_bind_matrices[joint_index]
+                self.global_transforms[node_index] * inverse_bind_transforms[joint_index]
             })
     }
 

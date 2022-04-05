@@ -526,7 +526,7 @@ async fn run() {
     let joint_transforms_buffer =
         device.create_resource(device.inner.create_buffer(&wgpu::BufferDescriptor {
             label: Some("player joint transforms"),
-            size: (capsule.joint_indices_to_node_indices.len() * std::mem::size_of::<Mat4>())
+            size: (capsule.joint_indices_to_node_indices.len() * std::mem::size_of::<gltf_helpers::Similarity>())
                 as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
             mapped_at_creation: false,
@@ -592,7 +592,7 @@ async fn run() {
             let joint_transforms: Vec<_> = player_joints
                 .iter(
                     &capsule.joint_indices_to_node_indices,
-                    &capsule.inverse_bind_matrices,
+                    &capsule.inverse_bind_transforms,
                 )
                 .collect();
 

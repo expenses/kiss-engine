@@ -20,25 +20,25 @@ struct Out {
 };
 
 [[vk::binding(4)]] cbuffer _ {
-    float4x4 joint_transforms[10];
+    Similarity joint_transforms[10];
 };
 
 Out main(In input) {
     Out output;
 
-    float4x4 skin =
-		input.weights.x * joint_transforms[input.joints.x] +
-		input.weights.y * joint_transforms[input.joints.y] +
-		input.weights.z * joint_transforms[input.joints.z] +
-		input.weights.w * joint_transforms[input.joints.w];
+    Similarity skin =
+		joint_transforms[input.joints.x] * input.weights.x +
+		joint_transforms[input.joints.y] * input.weights.y +
+		joint_transforms[input.joints.z] * input.weights.z +
+		joint_transforms[input.joints.w] * input.weights.w;
 
-    float3x3 rot = rotation_matrix_y(uniforms.player_facing);
+    Quaternion rot = Quaternion::from_rotation_y(uniforms.player_facing);
 
-    float3 final_position = uniforms.player_position + mul(rot, mul(skin, float4(input.pos, 1.0)).xyz);
+    float3 final_position = uniforms.player_position + rot * (skin * input.pos);
 
     output.vertex_position = mul(uniforms.matrices, float4(final_position, 1.0));
     output.uv = input.uv;
-    output.normal = mul(rot, input.normal);
+    output.normal = rot * input.normal;
     output.position = final_position;
 
     return output;

@@ -1,10 +1,9 @@
-use glam::Mat4;
 use glam::Vec2;
 use glam::Vec3;
 use kiss_engine_wgpu::{Device, Resource, Texture};
 use wgpu::util::DeviceExt;
 
-use gltf_helpers::{NodeTree, animation};
+use gltf_helpers::{NodeTree, animation, Similarity};
 
 pub(crate) struct Model {
     positions: wgpu::Buffer,
@@ -16,7 +15,7 @@ pub(crate) struct Model {
     pub(crate) weights: wgpu::Buffer,
     pub(crate) depth_first_nodes: Vec<(usize, Option<usize>)>,
     pub(crate) animations: Vec<animation::Animation>,
-    pub(crate) inverse_bind_matrices: Vec<Mat4>,
+    pub(crate) inverse_bind_transforms: Vec<Similarity>,
     pub(crate) joint_indices_to_node_indices: Vec<usize>,
 }
 
@@ -107,18 +106,21 @@ impl Model {
             gltf.nodes().map(|node| node.index()).collect()
         };
 
-        let inverse_bind_matrices: Vec<Mat4> = if let Some(skin) = skin.as_ref() {
+        let inverse_bind_transforms: Vec<Similarity> = if let Some(skin) = skin.as_ref() {
             skin.reader(|buffer| {
                 assert_eq!(buffer.index(), 0);
                 Some(buffer_blob)
             })
             .read_inverse_bind_matrices()
             .expect("Missing inverse bind matrices")
-            .map(|mat| Mat4::from_cols_array_2d(&mat))
+            .map(|matrix| {
+                let (translation, rotation, scale) = gltf::scene::Transform::Matrix { matrix }.decomposed();
+                Similarity::new_from_gltf(translation, rotation, scale)
+            })
             .collect()
         } else {
             gltf.nodes()
-                .map(|node| node_tree.transform_of(node.index()).as_mat4().inverse())
+                .map(|node| node_tree.transform_of(node.index()).inverse())
                 .collect()
         };
 
@@ -158,7 +160,7 @@ impl Model {
                 depth_first_nodes,
                 animations,
                 joint_indices_to_node_indices,
-                inverse_bind_matrices,
+                inverse_bind_transforms,
             },
             animation_joints,
         )

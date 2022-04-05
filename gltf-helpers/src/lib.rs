@@ -2,7 +2,7 @@ pub mod animation;
 use glam::{Vec3, Quat, Mat3, Mat4};
 use std::ops::Mul;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, bytemuck::Zeroable, bytemuck::Pod)]
 #[repr(C)]
 pub struct Similarity {
     pub translation: Vec3,
@@ -21,6 +21,33 @@ impl Similarity {
         Mat4::from_translation(self.translation)
             * Mat4::from_mat3(Mat3::from_quat(self.rotation))
             * Mat4::from_scale(Vec3::splat(self.scale))
+    }
+
+    pub fn inverse(&self) -> Self {
+        Self {
+            rotation: self.rotation.inverse(),
+            translation: self.rotation.inverse() * (-self.translation),
+            scale: 1.0 / self.scale,
+        }
+    }
+
+    pub fn new_from_gltf(translation: [f32; 3], rotation: [f32; 4], scale: [f32; 3]) -> Self {
+        assert!(
+            (scale[0] - scale[1]).abs() <= std::f32::EPSILON * 10.0,
+            "{:?}",
+            scale
+        );
+        assert!(
+            (scale[0] - scale[2]).abs() <= std::f32::EPSILON * 10.0,
+            "{:?}",
+            scale
+        );
+
+        Similarity {
+            translation: translation.into(),
+            rotation: Quat::from_array(rotation),
+            scale: scale[0],
+        }
     }
 }
 
@@ -54,23 +81,7 @@ impl NodeTree {
 
         for node in nodes {
             let (translation, rotation, scale) = node.transform().decomposed();
-
-            assert!(
-                (scale[0] - scale[1]).abs() <= std::f32::EPSILON * 10.0,
-                "{:?}",
-                scale
-            );
-            assert!(
-                (scale[0] - scale[2]).abs() <= std::f32::EPSILON * 10.0,
-                "{:?}",
-                scale
-            );
-
-            inner[node.index()].0 = Similarity {
-                translation: translation.into(),
-                rotation: Quat::from_array(rotation),
-                scale: scale[0],
-            };
+            inner[node.index()].0 = Similarity::new_from_gltf(translation, rotation, scale);
             for child in node.children() {
                 inner[child.index()].1 = node.index();
             }
