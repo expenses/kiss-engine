@@ -4,12 +4,12 @@ use futures::{SinkExt, StreamExt};
 use std::ffi::CString;
 use std::sync::Arc;
 
-use crate::binding_resources::{DescriptorSet, Image, Resource};
+use crate::binding_resources::BindingResource;
+use crate::binding_resources::{Buffer, DescriptorSet, Image, Resource};
 use crate::pipeline_resources::{
     GraphicsPipeline, GraphicsPipelineSettings, ReloadableShader, Shader, VertexBufferLayout,
 };
 use crate::primitives::CacheMap;
-use crate::binding_resources::{BindingResource};
 
 pub struct DropSignal<T> {
     inner: T,
@@ -34,6 +34,7 @@ pub(crate) type Allocator = Arc<parking_lot::Mutex<gpu_allocator::vulkan::Alloca
 
 pub struct Device {
     pub inner: ash::Device,
+    pub queue_family: u32,
     debug_utils: ext::DebugUtils,
     pub swapchain: khr::Swapchain,
     pub(crate) shaders: CacheMap<&'static str, DropSignal<Arc<ReloadableShader>>>,
@@ -42,7 +43,7 @@ pub struct Device {
     pub(crate) descriptor_sets: CacheMap<&'static str, DescriptorSet>,
     images: CacheMap<&'static str, SizedImage>,
     threads: parking_lot::Mutex<Vec<std::thread::JoinHandle<()>>>,
-    next_resource_id: std::sync::atomic::AtomicU32,
+    pub(crate) next_resource_id: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl Device {
@@ -51,9 +52,11 @@ impl Device {
         allocator: gpu_allocator::vulkan::Allocator,
         debug_utils: ext::DebugUtils,
         swapchain: khr::Swapchain,
+        queue_family: u32,
     ) -> Self {
         Self {
             inner: device,
+            queue_family,
             debug_utils,
             swapchain,
             allocator: Arc::new(parking_lot::Mutex::new(allocator)),
@@ -72,7 +75,7 @@ impl Device {
         extent: vk::Extent2D,
         format: vk::Format,
         usage: vk::ImageUsageFlags,
-    ) -> &Image {
+    ) -> &Resource<Image> {
         let image_fn = || SizedImage {
             image: self.create_resource(Image::new_2d(self, name, extent, format, usage)),
             extent,
@@ -242,6 +245,46 @@ impl Device {
             descriptor_set
         }
     }
+
+    pub fn create_buffer(
+        &self,
+        name: &str,
+        bytes: &[u8],
+        usages: vk::BufferUsageFlags,
+    ) -> Resource<Buffer> {
+        self.create_resource(Buffer::new_from_bytes(self, bytes, name, usages))
+    }
+
+    pub fn create_buffer_of_size(
+        &self,
+        name: &str,
+        size: vk::DeviceSize,
+        usages: vk::BufferUsageFlags,
+    ) -> Resource<Buffer> {
+        self.create_resource(Buffer::new_of_size(self, size, name, usages))
+    }
+
+    pub fn rendering_with<'a>(
+        &'a self,
+        color_attachment_formats: &'a [vk::Format],
+    ) -> RenderingDevice<'a> {
+        RenderingDevice {
+            device: self,
+            color_attachment_formats,
+        }
+    }
+
+    pub fn try_get_cached_image(&self, name: &'static str) -> Option<&Resource<Image>> {
+        self.images.try_get(&name).map(|image| &image.image)
+    }
+}
+
+impl std::ops::Deref for Device {
+    type Target = ash::Device;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
 }
 
 impl Drop for Device {
@@ -256,6 +299,39 @@ impl Drop for Device {
                 eprintln!("Error: {:?}", err);
             }
         }
+    }
+}
+
+pub struct RenderingDevice<'a> {
+    device: &'a Device,
+    color_attachment_formats: &'a [vk::Format],
+}
+
+impl<'a> RenderingDevice<'a> {
+    pub fn get_graphics_pipeline(
+        &self,
+        name: &'static str,
+        vertex_shader: &ReloadableShader,
+        fragment_shader: Option<&ReloadableShader>,
+        settings: &GraphicsPipelineSettings,
+        vertex_binding_layouts: &[VertexBufferLayout],
+    ) -> &GraphicsPipeline {
+        self.device.get_graphics_pipeline(
+            name,
+            vertex_shader,
+            fragment_shader,
+            settings,
+            self.color_attachment_formats,
+            vertex_binding_layouts,
+        )
+    }
+}
+
+impl<'a> std::ops::Deref for RenderingDevice<'a> {
+    type Target = Device;
+
+    fn deref(&self) -> &Self::Target {
+        &self.device
     }
 }
 

@@ -13,3 +13,4 @@ notify = "5.0.0-pre.14"
 rspirv-reflect = "0.7.0"
 gpu-allocator = { git = "https://github.com/Traverse-Research/gpu-allocator", branch = "ash-0.37" }
 futures = "0.3.21"
+vk-sync = { package = "vk-sync-fork", version = "0.4.0" }

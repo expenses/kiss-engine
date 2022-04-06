@@ -80,6 +80,16 @@ where
             println!("Updating {} items in {} ({})", num_updating, name, new_len);
         }
     }
+
+    pub(crate) fn try_get(&self, key: &K) -> Option<&V> {
+        if let Some(value) = self.inserting.get(key) {
+            Some(value)
+        } else if let Some(value) = self.map.get(key) {
+            Some(value)
+        } else {
+            None
+        }
+    }
 }
 
 /// A callback for the [Vulkan Debug Utils Messenger](https://docs.rs/ash/0.33.3+1.2.191/ash/vk/struct.DebugUtilsMessengerEXT.html)

@@ -3,6 +3,8 @@ use ash::extensions::ext;
 use ash::vk;
 use std::sync::atomic;
 
+pub const MAX_BINDLESS_IMAGES: u32 = u16::max_value() as u32;
+
 pub(crate) struct Shader {
     device: ash::Device,
     pub(crate) module: vk::ShaderModule,
@@ -36,20 +38,15 @@ impl Shader {
         }
     }
 
-    pub(crate) fn merge_bindings(&self, other: &Shader) -> Vec<vk::DescriptorSetLayoutBinding> {
-        let merged = merge_descriptor_set_layout_bindings(
+    fn merge_bindings(&self, other: &Shader) -> Vec<DescriptorSetLayoutBinding> {
+        merge_descriptor_set_layout_bindings(
             &self.descriptor_set_layout_bindings,
             &other.descriptor_set_layout_bindings,
-        );
-
-        merged.iter().map(|binding| binding.as_vk()).collect()
+        )
     }
 
-    pub(crate) fn solo_bindings(&self) -> Vec<vk::DescriptorSetLayoutBinding> {
-        self.descriptor_set_layout_bindings
-            .iter()
-            .map(|binding| binding.as_vk())
-            .collect()
+    fn solo_bindings(&self) -> Vec<DescriptorSetLayoutBinding> {
+        self.descriptor_set_layout_bindings.clone()
     }
 }
 
@@ -61,13 +58,14 @@ impl Drop for Shader {
     }
 }
 
-// Minus p_immutable_samplers as it's not Send.
+// Minus p_immutable_samplers as it's not Send and has a partially bound flag.
 #[derive(Clone, Copy, Debug)]
 struct DescriptorSetLayoutBinding {
     binding: u32,
     stage_flags: vk::ShaderStageFlags,
     descriptor_count: u32,
     descriptor_type: vk::DescriptorType,
+    partially_bound: bool,
 }
 
 impl DescriptorSetLayoutBinding {
@@ -148,17 +146,20 @@ fn reflect_descriptor_set_layout_bindings(
 
     descriptor_set
         .iter()
-        .map(|(&binding, info)| DescriptorSetLayoutBinding {
-            binding,
-            stage_flags: shader_stage_flags,
-            descriptor_count: match info.binding_count {
-                rspirv_reflect::BindingCount::One => 1,
-                rspirv_reflect::BindingCount::StaticSized(size) => size as u32,
-                rspirv_reflect::BindingCount::Unbounded => {
-                    unimplemented!("No good way to handle unbounded binding counts yet.")
-                }
-            },
-            descriptor_type: vk::DescriptorType::from_raw(info.ty.0 as i32),
+        .map(|(&binding, info)| {
+            let (descriptor_count, partially_bound) = match info.binding_count {
+                rspirv_reflect::BindingCount::One => (1, false),
+                rspirv_reflect::BindingCount::StaticSized(size) => (size as u32, false),
+                rspirv_reflect::BindingCount::Unbounded => (MAX_BINDLESS_IMAGES, true),
+            };
+
+            DescriptorSetLayoutBinding {
+                binding,
+                stage_flags: shader_stage_flags,
+                descriptor_count,
+                descriptor_type: vk::DescriptorType::from_raw(info.ty.0 as i32),
+                partially_bound,
+            }
         })
         .collect()
 }
@@ -182,7 +183,7 @@ impl Default for GraphicsPipelineSettings {
 pub struct GraphicsPipeline {
     device: ash::Device,
     pub(crate) descriptor_set_layout: vk::DescriptorSetLayout,
-    pub pipeline_layout: vk::PipelineLayout,
+    pub layout: vk::PipelineLayout,
     pub(crate) shader_versions: (u32, Option<u32>),
     pub pipeline: vk::Pipeline,
 }
@@ -204,11 +205,34 @@ impl GraphicsPipeline {
             vertex_shader.solo_bindings()
         };
 
+        let vk_bindings: Vec<_> = bindings.iter().map(|binding| binding.as_vk()).collect();
+
+        let any_partially_bound = bindings.iter().any(|binding| binding.partially_bound);
+
+        let flags: Vec<_> = bindings
+            .iter()
+            .map(|binding| {
+                if binding.partially_bound {
+                    vk::DescriptorBindingFlags::PARTIALLY_BOUND
+                } else {
+                    vk::DescriptorBindingFlags::empty()
+                }
+            })
+            .collect();
+
+        let mut flags =
+            vk::DescriptorSetLayoutBindingFlagsCreateInfo::builder().binding_flags(&flags);
+
+        let mut create_info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&vk_bindings);
+
+        if any_partially_bound {
+            create_info = create_info.push_next(&mut flags);
+        }
+
         let descriptor_set_layout = unsafe {
-            device.inner.create_descriptor_set_layout(
-                &vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings),
-                None,
-            )
+            device
+                .inner
+                .create_descriptor_set_layout(&create_info, None)
         }
         .unwrap();
 
@@ -254,6 +278,7 @@ impl GraphicsPipeline {
                     vk::Format::R32G32_SFLOAT => 8,
                     vk::Format::R32G32B32_SFLOAT => 12,
                     vk::Format::R32G32B32A32_SFLOAT => 16,
+                    vk::Format::R16G16B16A16_UINT => 8,
                     other => unimplemented!("format: {:?}", other),
                 },
                 input_rate: layout.input_rate,
@@ -288,13 +313,18 @@ impl GraphicsPipeline {
         let dynamic_state = vk::PipelineDynamicStateCreateInfo::builder()
             .dynamic_states(&[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR]);
 
-        let blend_states = &[*vk::PipelineColorBlendAttachmentState::builder()
-            .color_write_mask(vk::ColorComponentFlags::RGBA)
-            .blend_enable(false)];
+        let blend_states: Vec<_> = color_attachment_formats
+            .iter()
+            .map(|_| {
+                *vk::PipelineColorBlendAttachmentState::builder()
+                    .color_write_mask(vk::ColorComponentFlags::RGBA)
+                    .blend_enable(false)
+            })
+            .collect();
 
         let color_blend_state = vk::PipelineColorBlendStateCreateInfo::builder()
             .logic_op_enable(false)
-            .attachments(blend_states);
+            .attachments(&blend_states);
 
         let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::builder()
             .depth_test_enable(settings.depth_test_enable)
@@ -330,7 +360,7 @@ impl GraphicsPipeline {
         Self {
             device: device.inner.clone(),
             descriptor_set_layout,
-            pipeline_layout,
+            layout: pipeline_layout,
             shader_versions,
             pipeline: graphics_pipeline,
         }
@@ -341,8 +371,7 @@ impl Drop for GraphicsPipeline {
     fn drop(&mut self) {
         unsafe {
             self.device.destroy_pipeline(self.pipeline, None);
-            self.device
-                .destroy_pipeline_layout(self.pipeline_layout, None);
+            self.device.destroy_pipeline_layout(self.layout, None);
             self.device
                 .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
         }

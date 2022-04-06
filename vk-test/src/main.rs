@@ -279,7 +279,7 @@ fn main() {
 
     let dynamic_rendering_ext = khr::DynamicRendering::new(&instance, &device);
 
-    let mut device = Device::new(device, allocator, debug_utils_ext, swapchain_ext);
+    let mut device = Device::new(device, allocator, debug_utils_ext, swapchain_ext, queue_family);
 
     let mut swapchain = Swapchain::new(&device, &swapchain_info);
 
@@ -668,7 +668,7 @@ fn main() {
                             device.inner.cmd_bind_descriptor_sets(
                                 command_buffer,
                                 vk::PipelineBindPoint::GRAPHICS,
-                                world_pipeline.pipeline_layout,
+                                world_pipeline.layout,
                                 0,
                                 &[ds.inner],
                                 &[],
@@ -759,7 +759,7 @@ fn main() {
                     device.inner.cmd_bind_descriptor_sets(
                         command_buffer,
                         vk::PipelineBindPoint::GRAPHICS,
-                        world_pipeline.pipeline_layout,
+                        world_pipeline.layout,
                         0,
                         &[ds.inner],
                         &[],
