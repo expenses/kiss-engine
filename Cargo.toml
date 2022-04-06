@@ -2,12 +2,14 @@
 resolver = "2"
 members = [
     "kiss-engine-wgpu",
+    "kiss-engine-vk",
     "wgpu-test",
     "run-wasm",
     "wasm-web-helpers",
     "its-a-me",
     "ludum-dare",
     "gltf-helpers",
+    "vk-test",
 ]
 
 [patch."https://github.com/gfx-rs/naga"]

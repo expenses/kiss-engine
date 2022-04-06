@@ -1,0 +1,15 @@
+[package]
+name = "kiss-engine-vk"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ash = "0.37.0"
+c_str_macro = "1.0.3"
+log = "0.4.16"
+elsa = "1.7.0"
+parking_lot = "0.12.0"
+notify = "5.0.0-pre.14"
+rspirv-reflect = "0.7.0"
+gpu-allocator = { git = "https://github.com/Traverse-Research/gpu-allocator", branch = "ash-0.37" }
+futures = "0.3.21"
