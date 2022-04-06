@@ -6,28 +6,20 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-pollster = "0.2.5"
+ash = "0.37.0"
+ash-window = "0.10.0"
+c_str_macro = "1.0.3"
 winit = "0.26.1"
-kiss-engine-wgpu = { path = "../kiss-engine-wgpu" }
+kiss-engine-vk = { path = "../kiss-engine-vk" }
 log = "0.4.16"
-bytemuck = { version = "1.8.0", features = ["derive"] }
+bytemuck = { version = "1.9.1", features = ["derive"] }
 env_logger = "0.9.0"
-gltf = { version = "1.0.0" }
+gltf = "1.0.0"
 glam = { version = "0.20.3", features = ["bytemuck"] }
 anyhow = "1.0.56"
 rand = "0.8.5"
 image = { version = "0.24.1", default-features = false, features = ["png"] }
-wgpu_glyph = "0.16.0"
-wgpu = "0.12.0"
 ordered-float = "2.10.0"
-getrandom = { version = "0.2.6", features = ["js"], optional = true }
-console_error_panic_hook = { version = "0.1.7", optional = true }
-wasm-web-helpers = { path = "../wasm-web-helpers", optional = true }
-console_log = { version = "0.2.0", optional = true }
-wasm-bindgen-futures = { version = "0.4.29", optional = true }
 gltf-helpers = { path = "../gltf-helpers" }
-
-
-[features]
-standalone = ["kiss-engine-wgpu/standalone"]
-wasm = ["standalone", "wgpu/webgl", "rand/getrandom", "getrandom", "console_error_panic_hook", "wasm-web-helpers", "console_log", "wasm-bindgen-futures"]
+gpu-allocator = { git = "https://github.com/Traverse-Research/gpu-allocator", branch = "ash-0.37" }
+vk-sync = { package = "vk-sync-fork", version = "0.4.0" }

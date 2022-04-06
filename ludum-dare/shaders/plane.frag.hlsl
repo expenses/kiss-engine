@@ -6,11 +6,8 @@
 
 [[vk::binding(2)]] sampler tex_sampler;
 [[vk::binding(3)]] sampler linear_sampler;
-[[vk::binding(4)]] Texture2D<float3> grass_tex;
-[[vk::binding(5)]] Texture2D<float3> sand_tex;
-[[vk::binding(6)]] Texture2D<float3> rock_tex;
-[[vk::binding(7)]] Texture2D<float3> forest_tex;
-[[vk::binding(8)]] Texture2D<float> forest_map_tex;
+
+[[vk::binding(4)]] Texture2D<float3> ground_textures[];
 
 struct In {
     float2 uv: TEXCOORD0;
@@ -30,12 +27,18 @@ Out main(In input) {
 
     float2 uv = input.uv * 10.0;
 
-    float3 shore = sand_tex.Sample(tex_sampler, uv);
-    float3 grass = grass_tex.Sample(tex_sampler, uv);
-    float3 rock = rock_tex.Sample(tex_sampler, uv);
-    float3 forest = forest_tex.Sample(tex_sampler, uv);
+    uint t_grass = 0;
+    uint t_sand = 1;
+    uint t_rock = 2;
+    uint t_forest = 3;
+    uint t_forest_map = 4;
 
-    float forest_map = forest_map_tex.Sample(linear_sampler, input.uv);
+    float3 shore = ground_textures[t_sand].Sample(tex_sampler, uv);
+    float3 grass = ground_textures[t_grass].Sample(tex_sampler, uv);
+    float3 rock = ground_textures[t_rock].Sample(tex_sampler, uv);
+    float3 forest = ground_textures[t_forest].Sample(tex_sampler, uv);
+
+    float forest_map = ground_textures[t_forest_map].Sample(linear_sampler, input.uv).r;
 
     float3 greenery = lerp(grass, forest, forest_map);
 

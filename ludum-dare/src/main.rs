@@ -1,18 +1,27 @@
+use ash::extensions::ext;
+use ash::extensions::khr;
+use ash::vk;
 use glam::Mat4;
 use glam::Quat;
 use glam::Vec2;
 use glam::Vec3;
 use glam::Vec4;
+/*
 use kiss_engine_wgpu::{
     BindGroupLayoutSettings, BindingResource, Device, RenderPipelineDesc, VertexBufferLayout,
-};
+};*/
+use kiss_engine_vk::binding_resources::BindingResource;
+use kiss_engine_vk::cstr_from_array;
+use kiss_engine_vk::primitives::{vulkan_debug_utils_callback, CStrList, Swapchain};
+use kiss_engine_vk::VertexBufferLayout;
 use rand::Rng;
+use std::ffi::CStr;
+use winit::platform::run_return::EventLoopExtRunReturn;
 
 mod assets;
 
 use assets::{load_image, Model};
 
-use wgpu::util::DeviceExt;
 use winit::{
     event::{self, VirtualKeyCode, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
@@ -24,41 +33,41 @@ pub(crate) const Z_FAR: f32 = 50_000.0;
 const BASIC_FORMAT: &[VertexBufferLayout] = &[
     VertexBufferLayout {
         location: 0,
-        format: wgpu::VertexFormat::Float32x3,
-        step_mode: wgpu::VertexStepMode::Vertex,
+        format: vk::Format::R32G32B32_SFLOAT,
+        input_rate: vk::VertexInputRate::VERTEX,
     },
     VertexBufferLayout {
         location: 1,
-        format: wgpu::VertexFormat::Float32x3,
-        step_mode: wgpu::VertexStepMode::Vertex,
+        format: vk::Format::R32G32B32_SFLOAT,
+        input_rate: vk::VertexInputRate::VERTEX,
     },
     VertexBufferLayout {
         location: 2,
-        format: wgpu::VertexFormat::Float32x2,
-        step_mode: wgpu::VertexStepMode::Vertex,
+        format: vk::Format::R32G32_SFLOAT,
+        input_rate: vk::VertexInputRate::VERTEX,
     },
 ];
 
 const INSTANCED_FORMAT: &[VertexBufferLayout] = &[
     VertexBufferLayout {
         location: 0,
-        format: wgpu::VertexFormat::Float32x3,
-        step_mode: wgpu::VertexStepMode::Vertex,
+        format: vk::Format::R32G32B32_SFLOAT,
+        input_rate: vk::VertexInputRate::VERTEX,
     },
     VertexBufferLayout {
         location: 1,
-        format: wgpu::VertexFormat::Float32x3,
-        step_mode: wgpu::VertexStepMode::Vertex,
+        format: vk::Format::R32G32B32_SFLOAT,
+        input_rate: vk::VertexInputRate::VERTEX,
     },
     VertexBufferLayout {
         location: 2,
-        format: wgpu::VertexFormat::Float32x2,
-        step_mode: wgpu::VertexStepMode::Vertex,
+        format: vk::Format::R32G32_SFLOAT,
+        input_rate: vk::VertexInputRate::VERTEX,
     },
     VertexBufferLayout {
         location: 3,
-        format: wgpu::VertexFormat::Float32x4,
-        step_mode: wgpu::VertexStepMode::Instance,
+        format: vk::Format::R32G32B32A32_SFLOAT,
+        input_rate: vk::VertexInputRate::INSTANCE,
     },
 ];
 
@@ -66,80 +75,275 @@ fn perspective_matrix_reversed(width: u32, height: u32) -> glam::Mat4 {
     let aspect_ratio = width as f32 / height as f32;
     let vertical_fov = 59.0_f32.to_radians();
 
-    let focal_length_y = 1.0 / (vertical_fov / 2.0).tan();
-    let focal_length_x = focal_length_y / aspect_ratio;
+    let focal_length = 1.0 / (vertical_fov / 2.0).tan();
 
-    let near_minus_far = Z_NEAR - Z_FAR;
+    let a = Z_NEAR / (Z_FAR - Z_NEAR);
+    let b = Z_FAR * a;
 
     glam::Mat4::from_cols(
-        glam::Vec4::new(focal_length_x, 0.0, 0.0, 0.0),
-        glam::Vec4::new(0.0, focal_length_y, 0.0, 0.0),
-        glam::Vec4::new(0.0, 0.0, -Z_FAR / near_minus_far - 1.0, -1.0),
-        glam::Vec4::new(0.0, 0.0, -Z_NEAR * Z_FAR / near_minus_far, 0.0),
+        glam::Vec4::new(focal_length / aspect_ratio, 0.0, 0.0, 0.0),
+        glam::Vec4::new(0.0, -focal_length, 0.0, 0.0),
+        glam::Vec4::new(0.0, 0.0, a, -1.0),
+        glam::Vec4::new(0.0, 0.0, b, 0.0),
     )
 }
 
-async fn run() {
-    #[cfg(feature = "wasm")]
-    {
-        std::panic::set_hook(Box::new(console_error_panic_hook::hook));
-
-        let level: log::Level = wasm_web_helpers::parse_url_query_string_from_window("RUST_LOG")
-            .map(|x| x.parse().ok())
-            .flatten()
-            .unwrap_or(log::Level::Info);
-        console_log::init_with_level(level).expect("could not initialize logger");
-    }
-
-    #[cfg(not(feature = "wasm"))]
+fn main() {
     env_logger::init();
 
-    let event_loop = EventLoop::new();
+    let mut event_loop = EventLoop::new();
 
     let window = winit::window::WindowBuilder::new()
         .build(&event_loop)
         .expect("Failed to create window");
 
-    #[cfg(feature = "wasm")]
-    {
-        // On wasm, append the canvas to the document body
-        wasm_web_helpers::append_canvas(&window);
-    }
+    let entry = unsafe { ash::Entry::load() }.unwrap();
 
-    let backend = wgpu::util::backend_bits_from_env().unwrap_or_else(wgpu::Backends::all);
+    let app_info = vk::ApplicationInfo::builder()
+        .application_name(c_str_macro::c_str!("KISS Graph"))
+        .application_version(vk::make_api_version(0, 0, 1, 0))
+        .engine_version(vk::make_api_version(0, 0, 1, 0))
+        .api_version(vk::API_VERSION_1_1);
 
-    let instance = wgpu::Instance::new(backend);
-    let size = window.inner_size();
-    let surface = unsafe { instance.create_surface(&window) };
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: false,
-            compatible_surface: Some(&surface),
-        })
-        .await
-        .expect("No suitable GPU adapters found on the system!");
+    let instance_extensions = {
+        let mut instance_extensions = ash_window::enumerate_required_extensions(&window)
+            .unwrap()
+            .to_vec();
+        instance_extensions.extend(&[
+            ext::DebugUtils::name().as_ptr(),
+            khr::GetPhysicalDeviceProperties2::name().as_ptr(),
+        ]);
+        instance_extensions
+    };
 
-    let adapter_info = adapter.get_info();
-    println!(
-        "Using {} with the {:?} backend",
-        adapter_info.name, adapter_info.backend
-    );
+    let enabled_layers = CStrList::new(vec![CStr::from_bytes_with_nul(
+        b"VK_LAYER_KHRONOS_validation\0",
+    )
+    .unwrap()]);
 
-    let (device, queue) = adapter
-        .request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("device"),
-                features: Default::default(),
-                #[cfg(feature = "wasm")]
-                limits: wgpu::Limits::downlevel_webgl2_defaults(),
-                #[cfg(not(feature = "wasm"))]
-                limits: Default::default(),
-            },
+    let mut debug_messenger_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
+        .message_severity(
+            vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
+                | vk::DebugUtilsMessageSeverityFlagsEXT::INFO
+                | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+                | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
+        )
+        .message_type(
+            vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
+                | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
+                | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+        )
+        .pfn_user_callback(Some(vulkan_debug_utils_callback));
+
+    let instance = unsafe {
+        entry.create_instance(
+            &vk::InstanceCreateInfo::builder()
+                .application_info(&app_info)
+                .enabled_extension_names(&instance_extensions)
+                .enabled_layer_names(enabled_layers.pointers())
+                .push_next(&mut debug_messenger_info),
             None,
         )
-        .await
-        .expect("Unable to find a suitable GPU adapter!");
+    }
+    .unwrap();
+
+    let debug_utils_ext = ext::DebugUtils::new(&entry, &instance);
+
+    let surface_ext = khr::Surface::new(&entry, &instance);
+
+    let surface = unsafe { ash_window::create_surface(&entry, &instance, &window, None) }.unwrap();
+
+    let required_extensions =
+        CStrList::new(vec![khr::Swapchain::name(), khr::DynamicRendering::name(), vk::ExtDescriptorIndexingFn::name()]);
+
+    let (physical_device, queue_family, surface_format) = {
+        let physical_devices = unsafe { instance.enumerate_physical_devices() }.unwrap();
+
+        log::info!("Found {} device(s)", physical_devices.len(),);
+
+        let mut acceptable_devices = Vec::new();
+
+        unsafe {
+            for physical_device in physical_devices {
+                let properties = instance.get_physical_device_properties(physical_device);
+
+                log::info!(
+                    "Found device: {:?}",
+                    cstr_from_array(&properties.device_name)
+                );
+
+                log::info!(
+                    "Api version: {}.{}.{}",
+                    vk::api_version_major(properties.api_version),
+                    vk::api_version_minor(properties.api_version),
+                    vk::api_version_patch(properties.api_version)
+                );
+
+                let queue_family = instance
+                    .get_physical_device_queue_family_properties(physical_device)
+                    .into_iter()
+                    .enumerate()
+                    .position(|(i, queue_family_properties)| {
+                        queue_family_properties
+                            .queue_flags
+                            .contains(vk::QueueFlags::GRAPHICS)
+                            && surface_ext
+                                .get_physical_device_surface_support(
+                                    physical_device,
+                                    i as u32,
+                                    surface,
+                                )
+                                .unwrap()
+                    })
+                    .map(|queue_family| queue_family as u32)
+                    .unwrap();
+
+                let surface_formats = surface_ext
+                    .get_physical_device_surface_formats(physical_device, surface)
+                    .unwrap();
+
+                let surface_format = surface_formats
+                    .iter()
+                    .find(|surface_format| {
+                        surface_format.format == vk::Format::B8G8R8A8_SRGB
+                            && surface_format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
+                    })
+                    .or_else(|| surface_formats.get(0))
+                    .cloned()
+                    .unwrap();
+
+                let supported_device_extensions = instance
+                    .enumerate_device_extension_properties(physical_device)
+                    .unwrap();
+
+                let mut has_required_extensions = true;
+
+                for required_extension in &required_extensions.list {
+                    let device_has_extension =
+                        supported_device_extensions.iter().any(|extension| {
+                            &cstr_from_array(&extension.extension_name) == required_extension
+                        });
+
+                    log::info!("* {:?}: {}", required_extension, tick(device_has_extension));
+
+                    has_required_extensions &= device_has_extension;
+                }
+
+                if !has_required_extensions {
+                    break;
+                }
+
+                acceptable_devices.push((physical_device, queue_family, surface_format));
+            }
+        }
+
+        acceptable_devices[0]
+    };
+
+    let device = {
+        let queue_info = [*vk::DeviceQueueCreateInfo::builder()
+            .queue_family_index(queue_family)
+            .queue_priorities(&[1.0])];
+
+        let device_features = vk::PhysicalDeviceFeatures::builder();
+
+        let mut dynamic_rendering_features =
+            vk::PhysicalDeviceDynamicRenderingFeaturesKHR::builder().dynamic_rendering(true);
+
+        let mut descriptor_indexing_features = vk::PhysicalDeviceDescriptorIndexingFeatures::builder()
+            .runtime_descriptor_array(true)
+            .descriptor_binding_partially_bound(true);
+
+        let device_info = vk::DeviceCreateInfo::builder()
+            .queue_create_infos(&queue_info)
+            .enabled_features(&device_features)
+            .enabled_extension_names(required_extensions.pointers())
+            .enabled_layer_names(enabled_layers.pointers())
+            .push_next(&mut dynamic_rendering_features)
+            .push_next(&mut descriptor_indexing_features);
+
+        unsafe { instance.create_device(physical_device, &device_info, None) }.unwrap()
+    };
+
+    let queue = unsafe { device.get_device_queue(queue_family, 0) };
+
+    let command_pool = unsafe {
+        device.create_command_pool(
+            &vk::CommandPoolCreateInfo::builder().queue_family_index(queue_family),
+            None,
+        )
+    }
+    .unwrap();
+
+    let command_buffers = unsafe {
+        device.allocate_command_buffers(
+            &vk::CommandBufferAllocateInfo::builder()
+                .command_pool(command_pool)
+                .level(vk::CommandBufferLevel::PRIMARY)
+                .command_buffer_count(1),
+        )
+    }
+    .unwrap();
+
+    let command_buffer = command_buffers[0];
+
+    let allocator =
+        gpu_allocator::vulkan::Allocator::new(&gpu_allocator::vulkan::AllocatorCreateDesc {
+            instance: instance.clone(),
+            device: device.clone(),
+            physical_device,
+            debug_settings: gpu_allocator::AllocatorDebugSettings {
+                log_leaks_on_shutdown: true,
+                ..Default::default()
+            },
+            buffer_device_address: false,
+        })
+        .unwrap();
+
+    let surface_caps =
+        unsafe { surface_ext.get_physical_device_surface_capabilities(physical_device, surface) }
+            .unwrap();
+
+    let mut image_count = surface_caps.min_image_count.max(3);
+    if surface_caps.max_image_count > 0 && image_count > surface_caps.max_image_count {
+        image_count = surface_caps.max_image_count;
+    }
+
+    log::info!("Using {} swapchain images at a time.", image_count);
+
+    let swapchain_ext = khr::Swapchain::new(&instance, &device);
+
+    let size = window.inner_size();
+
+    let mut extent = vk::Extent2D {
+        width: size.width,
+        height: size.height,
+    };
+
+    let mut swapchain_info = *vk::SwapchainCreateInfoKHR::builder()
+        .surface(surface)
+        .min_image_count(image_count)
+        .image_format(surface_format.format)
+        .image_color_space(surface_format.color_space)
+        .image_extent(extent)
+        .image_array_layers(1)
+        .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+        .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .pre_transform(surface_caps.current_transform)
+        .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+        .present_mode(vk::PresentModeKHR::FIFO)
+        .clipped(true)
+        .old_swapchain(vk::SwapchainKHR::null());
+
+    let mut device = kiss_engine_vk::Device::new(
+        device,
+        allocator,
+        debug_utils_ext,
+        swapchain_ext,
+        queue_family,
+    );
+
+    let mut swapchain = Swapchain::new(&device, &swapchain_info);
 
     let (plane, _) = Model::new(include_bytes!("../plane.glb"), &device, "plane");
     let (capsule, mut player_joints) =
@@ -155,34 +359,9 @@ async fn run() {
 
     let (meteor, _) = Model::new(include_bytes!("../meteor.glb"), &device, "meteor");
 
-    let mut perspective_matrix = perspective_matrix_reversed(size.width, size.height);
 
     let size = window.inner_size();
-
-    let mut config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format: surface
-            .get_preferred_format(&adapter)
-            .expect("Failed to get preferred surface format"),
-        width: size.width,
-        height: size.height,
-        present_mode: wgpu::PresentMode::Fifo,
-    };
-    surface.configure(&device, &config);
-
-    // Prepare glyph_brush
-    let font = wgpu_glyph::ab_glyph::FontArc::try_from_slice(include_bytes!(
-        "../VonwaonBitmap-16pxLite.ttf"
-    ))
-    .expect("Failed to load font");
-
-    let mut glyph_brush = wgpu_glyph::GlyphBrushBuilder::using_font(font)
-        .initial_cache_size((512, 512))
-        .build(&device, config.format);
-
-    let mut staging_belt = wgpu::util::StagingBelt::new(1024);
-
-    let mut device = Device::new(device);
+    let mut perspective_matrix = perspective_matrix_reversed(size.width, size.height);
 
     let mut state = State::default();
 
@@ -198,164 +377,199 @@ async fn run() {
         )
     };
 
-    let uniform_buffer = device.create_resource(device.inner.create_buffer_init(
-        &wgpu::util::BufferInitDescriptor {
-            label: Some("uniform buffer"),
-            contents: bytemuck::bytes_of(&Uniforms {
-                matrices: perspective_matrix * view_matrix,
-                player_position: Vec3::new(state.player_position.x, 0.0, state.player_position.y),
-                player_facing: state.player_facing,
-                camera_position: Vec3::new(state.player_position.x, 0.0, state.player_position.y)
-                    + player_height_offset
-                    + state.orbit.as_vector(),
-                time: state.time,
-                window_size: Vec2::new(config.width as f32, config.height as f32),
-                ..Default::default()
-            }),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        },
-    ));
+    let mut uniform_buffer = device.create_buffer(
+        "uniform buffer",
+        bytemuck::bytes_of(&Uniforms {
+            matrices: perspective_matrix * view_matrix,
+            player_position: Vec3::new(state.player_position.x, 0.0, state.player_position.y),
+            player_facing: state.player_facing,
+            camera_position: Vec3::new(state.player_position.x, 0.0, state.player_position.y)
+                + player_height_offset
+                + state.orbit.as_vector(),
+            time: state.time,
+            window_size: Vec2::new(extent.width as f32, extent.height as f32),
+            ..Default::default()
+        }),
+        vk::BufferUsageFlags::UNIFORM_BUFFER,
+    );
 
-    let meteor_buffer = device.create_resource(device.inner.create_buffer_init(
-        &wgpu::util::BufferInitDescriptor {
-            label: Some("meteor buffer"),
-            contents: bytemuck::bytes_of(&MeteorGpuProps {
-                position: state.meteor_props.position,
-                _padding: 0,
-            }),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        },
-    ));
+    let mut meteor_buffer = device.create_buffer(
+        "meteor buffer",
+        bytemuck::bytes_of(&MeteorGpuProps {
+            position: state.meteor_props.position,
+            _padding: 0,
+        }),
+        vk::BufferUsageFlags::UNIFORM_BUFFER,
+    );
 
-    let bounce_sphere_buffer = device.create_resource(device.inner.create_buffer_init(
-        &wgpu::util::BufferInitDescriptor {
-            label: Some("bounce sphere buffer buffer"),
-            contents: bytemuck::bytes_of(&state.bounce_sphere_props),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        },
-    ));
+    let mut bounce_sphere_buffer = device.create_buffer(
+        "bounce sphere buffer",
+        bytemuck::bytes_of(&state.bounce_sphere_props),
+        vk::BufferUsageFlags::UNIFORM_BUFFER,
+    );
+    let dynamic_rendering_ext = khr::DynamicRendering::new(&instance, &device);
 
-    let height_map = device.get_texture(&wgpu::TextureDescriptor {
-        size: wgpu::Extent3d {
+    let height_map = device.get_image(
+        "height map",
+        vk::Extent2D {
             width: 1024,
             height: 1024,
-            depth_or_array_layers: 1,
         },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        // Has to be rgba float because of webgl.
-        format: wgpu::TextureFormat::Rgba32Float,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
-        label: Some("height map"),
-    });
+        vk::Format::R32G32B32A32_SFLOAT,
+        vk::ImageUsageFlags::COLOR_ATTACHMENT
+            | vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::TRANSFER_SRC,
+    );
 
     let buffer_size = 1024 * 1024 * 4 * 4;
 
-    let target_buffer = device.inner.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: buffer_size,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
+    let target_buffer = device.create_buffer_of_size(
+        "height map target buffer",
+        buffer_size,
+        vk::BufferUsageFlags::TRANSFER_DST,
+    );
 
-    {
-        let mut encoder = device
+    unsafe {
+        device
             .inner
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("init encoder"),
-            });
+            .begin_command_buffer(
+                command_buffer,
+                &vk::CommandBufferBeginInfo::builder()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+            )
+            .unwrap();
 
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("init render pass"),
-            color_attachments: &[wgpu::RenderPassColorAttachment {
-                view: &height_map.view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.0,
-                        g: 0.0,
-                        b: 0.0,
-                        a: 0.0,
-                    }),
-                    store: true,
-                },
-            }],
-            depth_stencil_attachment: None,
-        });
+        let subres = vk::ImageSubresourceRange::builder()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .level_count(1)
+            .layer_count(1);
 
-        let device = device.with_formats(&[wgpu::TextureFormat::Rgba32Float], None);
+        let subres_layers = vk::ImageSubresourceLayers::builder()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .layer_count(1);
 
-        let pipeline = device.get_pipeline(
-            "bake pipeline",
-            device.device.get_shader(
-                "shaders/compiled/bake_height_map.vert.spv",
-                #[cfg(feature = "standalone")]
-                include_bytes!("../shaders/compiled/bake_height_map.vert.spv"),
-                Default::default(),
-            ),
-            device.device.get_shader(
-                "shaders/compiled/bake_height_map.frag.spv",
-                #[cfg(feature = "standalone")]
-                include_bytes!("../shaders/compiled/bake_height_map.frag.spv"),
-                Default::default(),
-            ),
-            RenderPipelineDesc {
-                primitive: wgpu::PrimitiveState::default(),
+        let extent = vk::Extent2D {
+            width: 1024,
+            height: 1024,
+        };
+
+        vk_sync::cmd::pipeline_barrier(
+            &device,
+            command_buffer,
+            None,
+            &[],
+            &[vk_sync::ImageBarrier {
+                previous_accesses: &[],
+                next_accesses: &[vk_sync::AccessType::ColorAttachmentWrite],
+                discard_contents: true,
+                image: height_map.image,
+                range: *subres,
                 ..Default::default()
-            },
+            }],
+        );
+
+        kiss_engine_vk::begin_rendering(
+            &device,
+            command_buffer,
+            &dynamic_rendering_ext,
+            &[kiss_engine_vk::Attachment {
+                view: height_map.view,
+                clear_value: kiss_engine_vk::ClearValue::Clear([0.0; 4]),
+            }],
+            None,
+            extent,
+        );
+
+        let pipeline = device.get_graphics_pipeline(
+            "bake pipeline",
+            device.get_shader("shaders/compiled/bake_height_map.vert.spv"),
+            Some(device.get_shader("shaders/compiled/bake_height_map.frag.spv")),
+            &Default::default(),
+            &[vk::Format::R32G32B32A32_SFLOAT],
             BASIC_FORMAT,
         );
 
-        let bind_group = device.get_bind_group("bake height map", pipeline, &[]);
-
-        render_pass.set_pipeline(&pipeline.pipeline);
-        render_pass.set_bind_group(0, bind_group, &[]);
-
-        plane.render(&mut render_pass, 1);
-
-        drop(render_pass);
-
-        encoder.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
-                texture: &height_map.texture,
-                mip_level: 0,
-                origin: Default::default(),
-                aspect: Default::default(),
-            },
-            wgpu::ImageCopyBuffer {
-                buffer: &target_buffer,
-                layout: wgpu::ImageDataLayout {
-                    bytes_per_row: Some(
-                        std::num::NonZeroU32::new(1024 * 4 * 4).expect("unreachable"),
-                    ),
-                    ..Default::default()
-                },
-            },
-            wgpu::Extent3d {
-                width: 1024,
-                height: 1024,
-                depth_or_array_layers: 1,
-            },
+        device.inner.cmd_bind_pipeline(
+            command_buffer,
+            vk::PipelineBindPoint::GRAPHICS,
+            pipeline.pipeline,
         );
 
-        queue.submit(std::iter::once(encoder.finish()));
+        plane.render(&device, command_buffer, 1);
+
+        dynamic_rendering_ext.cmd_end_rendering(command_buffer);
+
+        vk_sync::cmd::pipeline_barrier(
+            &device,
+            command_buffer,
+            None,
+            &[],
+            &[vk_sync::ImageBarrier {
+                previous_accesses: &[vk_sync::AccessType::ColorAttachmentWrite],
+                next_accesses: &[vk_sync::AccessType::TransferRead],
+                image: height_map.image,
+                range: *subres,
+                ..Default::default()
+            }],
+        );
+
+        device.inner.cmd_copy_image_to_buffer(
+            command_buffer,
+            height_map.image,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            target_buffer.buffer,
+            &[vk::BufferImageCopy {
+                buffer_offset: 0,
+                buffer_row_length: 0,
+                buffer_image_height: 0,
+                image_subresource: *subres_layers,
+                image_offset: vk::Offset3D::default(),
+                image_extent: vk::Extent3D {
+                    width: extent.width,
+                    height: extent.height,
+                    depth: 1,
+                },
+            }],
+        );
+
+        vk_sync::cmd::pipeline_barrier(
+            &device,
+            command_buffer,
+            None,
+            &[],
+            &[vk_sync::ImageBarrier {
+                previous_accesses: &[vk_sync::AccessType::TransferRead],
+                next_accesses: &[vk_sync::AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer],
+                image: height_map.image,
+                range: *subres,
+                ..Default::default()
+            }],
+        );
+
+        device.inner.end_command_buffer(command_buffer).unwrap();
+
+        let fence_info = vk::FenceCreateInfo::builder();
+        let fence = device.inner.create_fence(&fence_info, None).unwrap();
+
+        device
+            .inner
+            .queue_submit(
+                queue,
+                &[*vk::SubmitInfo::builder()
+                    .command_buffers(&[command_buffer])
+                    .signal_semaphores(&[])],
+                fence,
+            )
+            .unwrap();
+
+        device
+            .inner
+            .wait_for_fences(&[fence], true, u64::MAX)
+            .unwrap();
     }
 
-    let mut rng = rand::rngs::OsRng::default();
-
     let heightmap = {
-        let slice = target_buffer.slice(..);
-
-        let map_future = slice.map_async(wgpu::MapMode::Read);
-
-        device.inner.poll(wgpu::Maintain::Wait);
-
-        map_future.await.expect("Mapping height map slice failed");
-
-        let bytes = slice.get_mapped_range();
+        let bytes = target_buffer.read_mapped();
 
         let vec4s: &[Vec4] = bytemuck::cast_slice(&bytes);
 
@@ -365,8 +579,6 @@ async fn run() {
             width: 1024,
         }
     };
-
-    target_buffer.unmap();
 
     drop(target_buffer);
 
@@ -382,6 +594,7 @@ async fn run() {
         }
     };
 
+    let mut rng = rand::rngs::OsRng::default();
     let mut forest_points = Vec::new();
 
     let infinite_loop_cap = 10000;
@@ -439,100 +652,126 @@ async fn run() {
     let num_forest_points = forest_points.len() as u32;
     let num_house_points = house_points.len() as u32;
 
-    let forest_points = device.create_resource(device.inner.create_buffer_init(
-        &wgpu::util::BufferInitDescriptor {
-            label: Some("forest buffer"),
-            contents: bytemuck::cast_slice(&forest_points),
-            usage: wgpu::BufferUsages::VERTEX,
-        },
-    ));
+    let forest_points = device.create_buffer(
+        "forest buffer",
+        bytemuck::cast_slice(&forest_points),
+        vk::BufferUsageFlags::VERTEX_BUFFER,
+    );
 
-    let house_points = device.create_resource(device.inner.create_buffer_init(
-        &wgpu::util::BufferInitDescriptor {
-            label: Some("house buffer"),
-            contents: bytemuck::cast_slice(&house_points),
-            usage: wgpu::BufferUsages::VERTEX,
-        },
-    ));
+    let house_points = device.create_buffer(
+        "house buffer",
+        bytemuck::cast_slice(&house_points),
+        vk::BufferUsageFlags::VERTEX_BUFFER,
+    );
 
     let grass_texture = load_image(
         &device,
-        &queue,
+        queue,
         include_bytes!("../grass.png"),
         "grass texture",
     );
     let sand_texture = load_image(
         &device,
-        &queue,
+        queue,
         include_bytes!("../sand.png"),
         "sand texture",
     );
     let rock_texture = load_image(
         &device,
-        &queue,
+        queue,
         include_bytes!("../rock.png"),
         "rock texture",
     );
     let forest_texture = load_image(
         &device,
-        &queue,
+        queue,
         include_bytes!("../grass_forest.png"),
         "forest texture",
     );
     let house_texture = load_image(
         &device,
-        &queue,
+        queue,
         include_bytes!("../house.png"),
         "house texture",
     );
 
     let forest_map_tex = load_image(
         &device,
-        &queue,
+        queue,
         include_bytes!("../forestmap.png"),
         "forest map texture",
     );
 
     let giant_tex = load_image(
         &device,
-        &queue,
+        queue,
         include_bytes!("../fire_giant.png"),
         "fire giant texture",
     );
 
     let meteor_tex = load_image(
         &device,
-        &queue,
+        queue,
         include_bytes!("../meteor.png"),
         "meteor texture",
     );
 
-    let sampler = device.create_resource(device.inner.create_sampler(&wgpu::SamplerDescriptor {
-        address_mode_u: wgpu::AddressMode::Repeat,
-        address_mode_v: wgpu::AddressMode::Repeat,
-        ..Default::default()
-    }));
+    let mut image_list = kiss_engine_vk::BindlessImageList::new(&device);
 
-    let linear_sampler =
-        device.create_resource(device.inner.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        }));
+    image_list.push(grass_texture);
+    image_list.push(sand_texture);
+    image_list.push(rock_texture);
+    image_list.push(forest_texture);
+    image_list.push(forest_map_tex);
+    let giant_tex = image_list.push(giant_tex);
 
-    let joint_transforms_buffer =
-        device.create_resource(device.inner.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("player joint transforms"),
-            size: (capsule.joint_indices_to_node_indices.len() * std::mem::size_of::<gltf_helpers::Similarity>())
-                as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
-            mapped_at_creation: false,
-        }));
+    let sampler = device.create_resource(unsafe {
+        device
+            .inner
+            .create_sampler(
+                &vk::SamplerCreateInfo::builder().max_lod(vk::LOD_CLAMP_NONE),
+                None,
+            )
+            .unwrap()
+    });
 
-    event_loop.run(move |event, _, control_flow| match event {
+    let linear_sampler = device.create_resource(unsafe {
+        device
+            .inner
+            .create_sampler(
+                &vk::SamplerCreateInfo::builder()
+                    .mag_filter(vk::Filter::LINEAR)
+                    .min_filter(vk::Filter::LINEAR)
+                    .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                    .max_lod(vk::LOD_CLAMP_NONE),
+                None,
+            )
+            .unwrap()
+    });
+
+    let mut joint_transforms_buffer = device.create_buffer_of_size(
+        "player joint transforms",
+        (capsule.joint_indices_to_node_indices.len()
+            * std::mem::size_of::<gltf_helpers::Similarity>()) as u64,
+        vk::BufferUsageFlags::UNIFORM_BUFFER,
+    );
+
+    let semaphore_info = vk::SemaphoreCreateInfo::builder();
+    let fence_info = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
+
+    let create_named_semaphore = |name| {
+        let semaphore = unsafe { device.inner.create_semaphore(&semaphore_info, None) }.unwrap();
+
+        device.set_object_name(semaphore, name);
+
+        semaphore
+    };
+
+    let present_semaphore = create_named_semaphore("present semaphore");
+    let render_semaphore = create_named_semaphore("render semaphore");
+    let render_fence = unsafe { device.inner.create_fence(&fence_info, None).unwrap() };
+
+    event_loop.run_return(|event, _, control_flow| match event {
         event::Event::WindowEvent {
             event:
                 WindowEvent::Resized(size)
@@ -543,9 +782,18 @@ async fn run() {
             ..
         } => {
             println!("Resizing to {:?}", size);
-            config.width = size.width.max(1);
-            config.height = size.height.max(1);
-            surface.configure(&device.inner, &config);
+
+            extent.width = size.width;
+            extent.height = size.height;
+            swapchain_info.image_extent = extent;
+            swapchain_info.old_swapchain = swapchain.inner;
+
+            unsafe {
+                device.inner.queue_wait_idle(queue).unwrap();
+            }
+
+            swapchain = Swapchain::new(&device, &swapchain_info);
+
             perspective_matrix = perspective_matrix_reversed(size.width, size.height);
         }
         event::Event::WindowEvent { event, .. } => match event {
@@ -596,32 +844,21 @@ async fn run() {
                 )
                 .collect();
 
-            queue.write_buffer(
-                &joint_transforms_buffer,
-                0,
-                bytemuck::cast_slice(&joint_transforms),
-            );
+            joint_transforms_buffer.write_mapped(bytemuck::cast_slice(&joint_transforms), 0);
 
-            queue.write_buffer(
-                &meteor_buffer,
-                0,
+            meteor_buffer.write_mapped(
                 bytemuck::bytes_of(&MeteorGpuProps {
                     position: state.meteor_props.position,
                     _padding: 0,
                 }),
+                0,
             );
 
-            queue.write_buffer(
-                &bounce_sphere_buffer,
-                0,
-                bytemuck::bytes_of(&state.bounce_sphere_props),
-            );
+            bounce_sphere_buffer.write_mapped(bytemuck::bytes_of(&state.bounce_sphere_props), 0);
 
             let player_position_3d = state.player_position_3d(&heightmap);
 
-            queue.write_buffer(
-                &uniform_buffer,
-                0,
+            uniform_buffer.write_mapped(
                 bytemuck::bytes_of(&Uniforms {
                     matrices: {
                         let view_matrix = {
@@ -640,18 +877,368 @@ async fn run() {
                         + player_height_offset
                         + state.orbit.as_vector(),
                     time: state.time,
-                    window_size: Vec2::new(config.width as f32, config.height as f32),
+                    window_size: Vec2::new(extent.width as f32, extent.height as f32),
                     ..Default::default()
                 }),
+                0,
             );
-
             window.request_redraw();
         }
         event::Event::RedrawRequested(_) => {
-            let frame = match surface.get_current_texture() {
+            unsafe {
+                device
+                    .inner
+                    .wait_for_fences(&[render_fence], true, u64::MAX)
+                    .unwrap();
+
+                device.inner.reset_fences(&[render_fence]).unwrap();
+
+                device
+                    .inner
+                    .reset_command_pool(command_pool, vk::CommandPoolResetFlags::empty())
+                    .unwrap();
+
+                let swapchain_image_index = match device.swapchain.acquire_next_image(
+                    swapchain.inner,
+                    u64::MAX,
+                    present_semaphore,
+                    vk::Fence::null(),
+                ) {
+                    Ok((swapchain_image_index, _suboptimal)) => swapchain_image_index,
+                    Err(error) => {
+                        log::warn!("Next frame error: {:?}", error);
+                        return;
+                    }
+                };
+
+                device
+                    .inner
+                    .begin_command_buffer(
+                        command_buffer,
+                        &vk::CommandBufferBeginInfo::builder()
+                            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+                    )
+                    .unwrap();
+
+                let subres = vk::ImageSubresourceRange::builder()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .level_count(1)
+                    .layer_count(1);
+
+                let depth_buffer = device.get_image(
+                    "depth buffer",
+                    extent,
+                    vk::Format::D32_SFLOAT,
+                    vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+                );
+
+                let opaque_texture = device.get_image(
+                    "opaque texture",
+                    extent,
+                    vk::Format::R8G8B8A8_SRGB,
+                    vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED
+                );
+
+                let depth_subres = vk::ImageSubresourceRange::builder()
+                    .aspect_mask(vk::ImageAspectFlags::DEPTH)
+                    .level_count(1)
+                    .layer_count(1);
+
+                vk_sync::cmd::pipeline_barrier(
+                    &device,
+                    command_buffer,
+                    None,
+                    &[],
+                    &[
+                        vk_sync::ImageBarrier {
+                            previous_accesses: &[vk_sync::AccessType::Present],
+                            next_accesses: &[vk_sync::AccessType::ColorAttachmentWrite],
+                            discard_contents: true,
+                            image: swapchain.images[swapchain_image_index as usize],
+                            range: *subres,
+                            ..Default::default()
+                        },
+                        vk_sync::ImageBarrier {
+                            next_accesses: &[vk_sync::AccessType::DepthStencilAttachmentWrite],
+                            discard_contents: true,
+                            image: depth_buffer.image,
+                            range: *depth_subres,
+                            ..Default::default()
+                        },
+                        vk_sync::ImageBarrier {
+                            previous_accesses: &[vk_sync::AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer],
+                            next_accesses: &[vk_sync::AccessType::ColorAttachmentWrite],
+                            discard_contents: true,
+                            image: opaque_texture.image,
+                            range: *subres,
+                            ..Default::default()
+                        },
+                    ],
+                );
+
+                kiss_engine_vk::begin_rendering(
+                    &device,
+                    command_buffer,
+                    &dynamic_rendering_ext,
+                    &[kiss_engine_vk::Attachment {
+                        view: swapchain.views[swapchain_image_index as usize],
+                        clear_value: kiss_engine_vk::ClearValue::Clear([0.1, 0.2, 0.3, 1.0]),
+                    }, kiss_engine_vk::Attachment {
+                        view: opaque_texture.view,
+                        clear_value: kiss_engine_vk::ClearValue::Clear([0.1, 0.2, 0.3, 1.0]),
+                    }],
+                    Some(kiss_engine_vk::Attachment {
+                        view: depth_buffer.view,
+                        clear_value: kiss_engine_vk::ClearValue::Clear(0.0),
+                    }),
+                    extent,
+                );
+
+                {
+                    let formats = &[swapchain_info.image_format, vk::Format::R8G8B8A8_SRGB];
+                    let device = device.rendering_with(formats);
+
+                    let pipeline = device.get_graphics_pipeline(
+                        "plane pipeline",
+                        device.get_shader("shaders/compiled/plane.vert.spv"),
+                        Some(device.get_shader("shaders/compiled/plane.frag.spv")),
+                        &Default::default(),
+                        BASIC_FORMAT,
+                    );
+
+                    let ds = device.get_descriptor_set(
+                        "plane",
+                        pipeline,
+                        &[
+                            BindingResource::Buffer(&uniform_buffer),
+                            BindingResource::Buffer(&meteor_buffer),
+                            BindingResource::Sampler(&sampler),
+                            BindingResource::Sampler(&linear_sampler),
+                            BindingResource::BindlessImageList(&image_list)
+                        ],
+                    );
+
+                    device.inner.cmd_bind_pipeline(
+                        command_buffer,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        pipeline.pipeline,
+                    );
+                    device.inner.cmd_bind_descriptor_sets(
+                        command_buffer,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        pipeline.layout,
+                        0,
+                        &[ds.inner],
+                        &[],
+                    );
+
+                    plane.render(&device, command_buffer, 1);
+
+                    {
+                        let pipeline = device.get_graphics_pipeline(
+                            "player pipeline",
+                            device.get_shader("shaders/compiled/capsule.vert.spv"),
+                            Some(device.get_shader("shaders/compiled/tree.frag.spv")),
+                            &Default::default(),
+                            &[
+                                VertexBufferLayout {
+                                    location: 0,
+                                    format: vk::Format::R32G32B32_SFLOAT,
+                                    input_rate: vk::VertexInputRate::VERTEX,
+                                },
+                                VertexBufferLayout {
+                                    location: 1,
+                                    format: vk::Format::R32G32B32_SFLOAT,
+                                    input_rate: vk::VertexInputRate::VERTEX,
+                                },
+                                VertexBufferLayout {
+                                    location: 2,
+                                    format: vk::Format::R32G32_SFLOAT,
+                                    input_rate: vk::VertexInputRate::VERTEX,
+                                },
+                                VertexBufferLayout {
+                                    location: 3,
+                                    format: vk::Format::R16G16B16A16_UINT,
+                                    input_rate: vk::VertexInputRate::VERTEX,
+                                },
+                                VertexBufferLayout {
+                                    location: 4,
+                                    format: vk::Format::R32G32B32A32_SFLOAT,
+                                    input_rate: vk::VertexInputRate::VERTEX,
+                                },
+                            ],
+                        );
+
+                        let ds = device.get_descriptor_set(
+                            "capsule",
+                            pipeline,
+                            &[
+                                BindingResource::Buffer(&uniform_buffer),
+                                BindingResource::Buffer(&meteor_buffer),
+                                BindingResource::Sampler(&sampler),
+                                BindingResource::Texture(image_list.get(giant_tex)),
+                                BindingResource::Buffer(&joint_transforms_buffer),
+                            ],
+                        );
+
+                        device.cmd_bind_pipeline(
+                            command_buffer,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            pipeline.pipeline,
+                        );
+                        device.cmd_bind_descriptor_sets(
+                            command_buffer,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            pipeline.layout,
+                            0,
+                            &[ds.inner],
+                            &[],
+                        );
+
+                        capsule.render_animated(&device, command_buffer, 1);
+                    }
+
+                    dynamic_rendering_ext.cmd_end_rendering(command_buffer);
+                }
+
+                kiss_engine_vk::begin_rendering(
+                    &device,
+                    command_buffer,
+                    &dynamic_rendering_ext,
+                    &[kiss_engine_vk::Attachment {
+                        view: swapchain.views[swapchain_image_index as usize],
+                        clear_value: kiss_engine_vk::ClearValue::Load,
+                    }],
+                    Some(kiss_engine_vk::Attachment {
+                        view: depth_buffer.view,
+                        clear_value: kiss_engine_vk::ClearValue::Load,
+                    }),
+                    extent,
+                );
+
+                vk_sync::cmd::pipeline_barrier(
+                    &device,
+                    command_buffer,
+                    None,
+                    &[],
+                    &[vk_sync::ImageBarrier {
+                        previous_accesses: &[vk_sync::AccessType::ColorAttachmentWrite],
+                        next_accesses: &[vk_sync::AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer],
+                        image: opaque_texture.image,
+                        range: *subres,
+                        ..Default::default()
+                    }],
+                );
+
+                {
+                    let formats = &[swapchain_info.image_format];
+                    let device = device.rendering_with(formats);
+
+
+                let pipeline = device.get_graphics_pipeline(
+                    "water pipeline",
+                    device.get_shader(
+                        "shaders/compiled/plane.vert.spv",
+                    ),
+                    Some(device.get_shader(
+                        "shaders/compiled/water.frag.spv",
+                    )),
+                    &Default::default(),
+                    BASIC_FORMAT,
+                );
+
+                let height_map = device.try_get_cached_image("height map").unwrap();
+
+                let descriptor_set = device.get_descriptor_set(
+                    "water",
+                    pipeline,
+                    &[
+                        BindingResource::Buffer(&uniform_buffer),
+                        BindingResource::Texture(opaque_texture),
+                        BindingResource::Sampler(&sampler),
+                        BindingResource::Texture(&height_map),
+                        BindingResource::Buffer(&meteor_buffer),
+                    ],
+                );
+
+                device.cmd_bind_pipeline(
+                    command_buffer,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    pipeline.pipeline,
+                );
+                device.cmd_bind_descriptor_sets(
+                    command_buffer,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    pipeline.layout,
+                    0,
+                    &[descriptor_set.inner],
+                    &[],
+                );
+
+                water.render(&device, command_buffer, 1);
+
+                /*
+                render_pass.set_pipeline(&pipeline.pipeline);
+                render_pass.set_bind_group(0, bind_group, &[]);
+
+                water.render(&mut render_pass, 1);
+                */
+                }
+
+                dynamic_rendering_ext.cmd_end_rendering(command_buffer);
+
+
+                vk_sync::cmd::pipeline_barrier(
+                    &device,
+                    command_buffer,
+                    None,
+                    &[],
+                    &[vk_sync::ImageBarrier {
+                        previous_accesses: &[vk_sync::AccessType::ColorAttachmentWrite],
+                        next_accesses: &[vk_sync::AccessType::Present],
+                        image: swapchain.images[swapchain_image_index as usize],
+                        range: *subres,
+                        ..Default::default()
+                    }],
+                );
+
+                device.end_command_buffer(command_buffer).unwrap();
+
+                {
+                    device
+                        .inner
+                        .queue_submit(
+                            queue,
+                            &[*vk::SubmitInfo::builder()
+                                .wait_semaphores(&[present_semaphore])
+                                .wait_dst_stage_mask(&[vk::PipelineStageFlags::TRANSFER])
+                                .command_buffers(&[command_buffer])
+                                .signal_semaphores(&[render_semaphore])],
+                            render_fence,
+                        )
+                        .unwrap();
+                }
+
+                {
+                    device
+                        .swapchain
+                        .queue_present(
+                            queue,
+                            &vk::PresentInfoKHR::builder()
+                                .wait_semaphores(&[render_semaphore])
+                                .swapchains(&[swapchain.inner])
+                                .image_indices(&[swapchain_image_index]),
+                        )
+                        .unwrap();
+                }
+
+                device.flush();
+            }
+
+            /*let frame = match surface.get_current_texture() {
                 Ok(frame) => frame,
                 Err(_) => {
-                    surface.configure(&device.inner, &config);
+                    surface.configure(&device, &config);
                     surface
                         .get_current_texture()
                         .expect("Failed to acquire next surface texture!")
@@ -804,28 +1391,28 @@ async fn run() {
                     &[
                         VertexBufferLayout {
                             location: 0,
-                            format: wgpu::VertexFormat::Float32x3,
-                            step_mode: wgpu::VertexStepMode::Vertex,
+                            format: vk::Format::R32G32B32_SFLOAT,
+                            input_rate: vk::VertexInputRate::VERTEX,
                         },
                         VertexBufferLayout {
                             location: 1,
-                            format: wgpu::VertexFormat::Float32x3,
-                            step_mode: wgpu::VertexStepMode::Vertex,
+                            format: vk::Format::R32G32B32_SFLOAT,
+                            input_rate: vk::VertexInputRate::VERTEX,
                         },
                         VertexBufferLayout {
                             location: 2,
-                            format: wgpu::VertexFormat::Float32x2,
-                            step_mode: wgpu::VertexStepMode::Vertex,
+                            format: vk::Format::R32G32_SFLOAT,
+                            input_rate: vk::VertexInputRate::VERTEX,
                         },
                         VertexBufferLayout {
                             location: 3,
                             format: wgpu::VertexFormat::Uint16x4,
-                            step_mode: wgpu::VertexStepMode::Vertex,
+                            input_rate: vk::VertexInputRate::VERTEX,
                         },
                         VertexBufferLayout {
                             location: 4,
-                            format: wgpu::VertexFormat::Float32x4,
-                            step_mode: wgpu::VertexStepMode::Vertex,
+                            format: vk::Format::R32G32B32A32_SFLOAT,
+                            input_rate: vk::VertexInputRate::VERTEX,
                         },
                     ],
                 );
@@ -1150,7 +1737,7 @@ async fn run() {
                 // Draw the text!
                 glyph_brush
                     .draw_queued(
-                        &device.inner,
+                        &device,
                         &mut staging_belt,
                         &mut encoder,
                         &view,
@@ -1166,10 +1753,34 @@ async fn run() {
 
             frame.present();
 
-            device.flush();
+            device.flush();*/
         }
         _ => {}
     });
+
+    unsafe {
+        device.queue_wait_idle(queue).unwrap();
+
+        device.destroy_semaphore(present_semaphore, None);
+        device.destroy_semaphore(render_semaphore, None);
+        device.destroy_fence(render_fence, None);
+        device.destroy_command_pool(command_pool, None);
+    }
+
+    drop(uniform_buffer);
+    drop(swapchain);
+
+    let raw_device = device.inner.clone();
+
+    /*drop(device);
+
+    unsafe {
+        raw_device.destroy_device(None);
+
+        surface_ext.destroy_surface(surface, None);
+
+        instance.destroy_instance(None);
+    }*/
 }
 
 #[derive(Default)]
@@ -1285,13 +1896,6 @@ impl HeightMap {
 
         self.floats[pos]
     }
-}
-
-fn main() {
-    #[cfg(feature = "wasm")]
-    wasm_bindgen_futures::spawn_local(run());
-    #[cfg(not(feature = "wasm"))]
-    pollster::block_on(run());
 }
 
 struct State {
@@ -1415,7 +2019,7 @@ impl State {
             self.meteor_props.velocity.z *= -1.0;
         }
 
-        self.meteor_props.position += self.meteor_props.velocity * delta_time;
+        //self.meteor_props.position += self.meteor_props.velocity * delta_time;
 
         if self.bounce_sphere_props.scale > 0.0
             && self
@@ -1480,5 +2084,13 @@ impl State {
             }
             _ => {}
         }
+    }
+}
+
+fn tick(supported: bool) -> &'static str {
+    if supported {
+        "✔️"
+    } else {
+        "❌"
     }
 }

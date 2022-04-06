@@ -1,7 +1,7 @@
 struct In {
     float3 pos: TEXCOORD0;
     float3 normal: TEXCOORD1;
-    float3 uv: TEXCOORD2;
+    float2 uv: TEXCOORD2;
 };
 
 struct Out {
@@ -12,7 +12,7 @@ struct Out {
 Out main(In input) {
     Out output;
 
-    output.position = float4(float2(input.uv.x, 1.0 - input.uv.y) * 2.0 - 1.0, 0.0, 1.0);
+    output.position = float4(float2(input.uv.x, input.uv.y) * 2.0 - 1.0, 0.0, 1.0);
 
     output.height = input.pos.y;
 

@@ -1,18 +1,19 @@
+use ash::vk;
 use glam::Vec2;
 use glam::Vec3;
-use kiss_engine_wgpu::{Device, Resource, Texture};
-use wgpu::util::DeviceExt;
+use kiss_engine_vk::Buffer;
+use kiss_engine_vk::{binding_resources::Resource, device::Device};
 
-use gltf_helpers::{NodeTree, animation, Similarity};
+use gltf_helpers::{animation, NodeTree, Similarity};
 
 pub(crate) struct Model {
-    positions: wgpu::Buffer,
-    normals: wgpu::Buffer,
-    uvs: wgpu::Buffer,
-    indices: wgpu::Buffer,
-    num_indices: u32,
-    pub(crate) joints: wgpu::Buffer,
-    pub(crate) weights: wgpu::Buffer,
+    pub(crate) positions: Resource<Buffer>,
+    pub(crate) normals: Resource<Buffer>,
+    pub(crate) uvs: Resource<Buffer>,
+    pub(crate) indices: Resource<Buffer>,
+    pub(crate) num_indices: u32,
+    pub(crate) joints: Option<Resource<Buffer>>,
+    pub(crate) weights: Option<Resource<Buffer>>,
     pub(crate) depth_first_nodes: Vec<(usize, Option<usize>)>,
     pub(crate) animations: Vec<animation::Animation>,
     pub(crate) inverse_bind_transforms: Vec<Similarity>,
@@ -22,7 +23,7 @@ pub(crate) struct Model {
 impl Model {
     pub(crate) fn new(
         bytes: &[u8],
-        device: &wgpu::Device,
+        device: &Device,
         name: &str,
     ) -> (Self, animation::AnimationJoints) {
         let gltf = gltf::Gltf::from_slice(bytes).expect("Failed to read gltf");
@@ -114,7 +115,8 @@ impl Model {
             .read_inverse_bind_matrices()
             .expect("Missing inverse bind matrices")
             .map(|matrix| {
-                let (translation, rotation, scale) = gltf::scene::Transform::Matrix { matrix }.decomposed();
+                let (translation, rotation, scale) =
+                    gltf::scene::Transform::Matrix { matrix }.decomposed();
                 Similarity::new_from_gltf(translation, rotation, scale)
             })
             .collect()
@@ -126,36 +128,44 @@ impl Model {
 
         (
             Self {
-                positions: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("{} positions buffer", name)),
-                    contents: bytemuck::cast_slice(&positions),
-                    usage: wgpu::BufferUsages::VERTEX,
-                }),
-                indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("{} indices buffer", name)),
-                    contents: bytemuck::cast_slice(&indices),
-                    usage: wgpu::BufferUsages::INDEX,
-                }),
-                normals: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("{} normals buffer", name)),
-                    contents: bytemuck::cast_slice(&normals),
-                    usage: wgpu::BufferUsages::VERTEX,
-                }),
-                uvs: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("{} uvs buffer", name)),
-                    contents: bytemuck::cast_slice(&uvs),
-                    usage: wgpu::BufferUsages::VERTEX,
-                }),
-                joints: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("{} joints buffer", name)),
-                    contents: bytemuck::cast_slice(&joints),
-                    usage: wgpu::BufferUsages::VERTEX,
-                }),
-                weights: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("{} weights buffer", name)),
-                    contents: bytemuck::cast_slice(&weights),
-                    usage: wgpu::BufferUsages::VERTEX,
-                }),
+                positions: device.create_buffer(
+                    &format!("{} positions buffer", name),
+                    bytemuck::cast_slice(&positions),
+                    vk::BufferUsageFlags::VERTEX_BUFFER,
+                ),
+                indices: device.create_buffer(
+                    &format!("{} indices buffer", name),
+                    bytemuck::cast_slice(&indices),
+                    vk::BufferUsageFlags::INDEX_BUFFER,
+                ),
+                normals: device.create_buffer(
+                    &format!("{} normals buffer", name),
+                    bytemuck::cast_slice(&normals),
+                    vk::BufferUsageFlags::VERTEX_BUFFER,
+                ),
+                uvs: device.create_buffer(
+                    &format!("{} uvs buffer", name),
+                    bytemuck::cast_slice(&uvs),
+                    vk::BufferUsageFlags::VERTEX_BUFFER,
+                ),
+                joints: if !joints.is_empty() {
+                    Some(device.create_buffer(
+                        &format!("{} joints buffer", name),
+                        bytemuck::cast_slice(&joints),
+                        vk::BufferUsageFlags::VERTEX_BUFFER,
+                    ))
+                } else {
+                    None
+                },
+                weights: if !weights.is_empty() {
+                    Some(device.create_buffer(
+                        &format!("{} weights buffer", name),
+                        bytemuck::cast_slice(&weights),
+                        vk::BufferUsageFlags::VERTEX_BUFFER,
+                    ))
+                } else {
+                    None
+                },
                 num_indices: indices.len() as u32,
                 depth_first_nodes,
                 animations,
@@ -166,46 +176,64 @@ impl Model {
         )
     }
 
-    pub(crate) fn render<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>, num_instances: u32) {
-        render_pass.set_vertex_buffer(0, self.positions.slice(..));
-        render_pass.set_vertex_buffer(1, self.normals.slice(..));
-        render_pass.set_vertex_buffer(2, self.uvs.slice(..));
-        render_pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+    pub(crate) unsafe fn render(
+        &self,
+        device: &ash::Device,
+        command_buffer: vk::CommandBuffer,
+        num_instances: u32,
+    ) {
+        device.cmd_bind_vertex_buffers(
+            command_buffer,
+            0,
+            &[self.positions.buffer, self.normals.buffer, self.uvs.buffer],
+            &[0, 0, 0],
+        );
+        device.cmd_bind_index_buffer(
+            command_buffer,
+            self.indices.buffer,
+            0,
+            vk::IndexType::UINT32,
+        );
+        device.cmd_draw_indexed(command_buffer, self.num_indices, num_instances, 0, 0, 0);
+    }
 
-        render_pass.draw_indexed(0..self.num_indices, 0, 0..num_instances);
+    pub(crate) unsafe fn render_animated(
+        &self,
+        device: &ash::Device,
+        command_buffer: vk::CommandBuffer,
+        num_instances: u32,
+    ) {
+        device.cmd_bind_vertex_buffers(
+            command_buffer,
+            0,
+            &[
+                self.positions.buffer,
+                self.normals.buffer,
+                self.uvs.buffer,
+                self.joints.as_ref().unwrap().buffer,
+                self.weights.as_ref().unwrap().buffer,
+            ],
+            &[0, 0, 0, 0, 0],
+        );
+        device.cmd_bind_index_buffer(
+            command_buffer,
+            self.indices.buffer,
+            0,
+            vk::IndexType::UINT32,
+        );
+        device.cmd_draw_indexed(command_buffer, self.num_indices, num_instances, 0, 0, 0);
     }
 }
 
-pub(crate) fn load_image(
-    device: &Device,
-    queue: &wgpu::Queue,
+pub fn load_image<'a>(
+    device: &'a Device,
+    queue: vk::Queue,
     bytes: &[u8],
-    name: &str,
-) -> Resource<Texture> {
+    name: &'static str,
+) -> kiss_engine_vk::Resource<kiss_engine_vk::Image> {
     let image = image::load_from_memory(bytes)
         .expect("Failed to read image")
         .to_rgba8();
 
-    let texture = device.inner.create_texture_with_data(
-        queue,
-        &wgpu::TextureDescriptor {
-            label: Some(name),
-            size: wgpu::Extent3d {
-                width: image.width(),
-                height: image.height(),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-        },
-        &*image,
-    );
-
-    device.create_resource(Texture {
-        view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
-        texture,
-    })
+    kiss_engine_vk::binding_resources::load_image(device, queue, &*image, image.width(), image.height(), name)
 }
