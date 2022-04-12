@@ -582,10 +582,7 @@ impl Device {
         }
     }
 
-    pub fn get_texture(
-        &self,
-        descriptor: &wgpu::TextureDescriptor<'static>,
-    ) -> &Resource<Texture> {
+    pub fn get_texture(&self, descriptor: &wgpu::TextureDescriptor<'static>) -> &Resource<Texture> {
         let name = descriptor.label.expect("TextureDescriptor needs a label");
 
         let create_texture_fn = || TextureWithExtent {

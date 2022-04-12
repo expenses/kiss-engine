@@ -121,10 +121,7 @@ pub struct AnimationJoints {
 }
 
 impl AnimationJoints {
-    pub fn new(
-        nodes: gltf::iter::Nodes,
-        depth_first_nodes: &[(usize, Option<usize>)],
-    ) -> Self {
+    pub fn new(nodes: gltf::iter::Nodes, depth_first_nodes: &[(usize, Option<usize>)]) -> Self {
         let joint_similarities: Vec<_> = nodes
             .map(|node| {
                 let (translation, rotation, scale) = node.transform().decomposed();

@@ -55,7 +55,9 @@ fn main() {
         .api_version(vk::API_VERSION_1_1);
 
     let instance_extensions = {
-        let mut instance_extensions = ash_window::enumerate_required_extensions(&window).unwrap().to_vec();
+        let mut instance_extensions = ash_window::enumerate_required_extensions(&window)
+            .unwrap()
+            .to_vec();
         instance_extensions.extend(&[
             ext::DebugUtils::name().as_ptr(),
             khr::GetPhysicalDeviceProperties2::name().as_ptr(),
@@ -279,7 +281,13 @@ fn main() {
 
     let dynamic_rendering_ext = khr::DynamicRendering::new(&instance, &device);
 
-    let mut device = Device::new(device, allocator, debug_utils_ext, swapchain_ext, queue_family);
+    let mut device = Device::new(
+        device,
+        allocator,
+        debug_utils_ext,
+        swapchain_ext,
+        queue_family,
+    );
 
     let mut swapchain = Swapchain::new(&device, &swapchain_info);
 

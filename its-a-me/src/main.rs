@@ -571,8 +571,12 @@ fn main() {
 
                 let pipeline = device.get_pipeline(
                     "blit pipeline",
-                    device.device.get_shader("shaders/full_screen_tri.vert.spv", Default::default()),
-                    device.device.get_shader("shaders/blit.frag.spv", Default::default()),
+                    device
+                        .device
+                        .get_shader("shaders/full_screen_tri.vert.spv", Default::default()),
+                    device
+                        .device
+                        .get_shader("shaders/blit.frag.spv", Default::default()),
                     RenderPipelineDesc::default(),
                     &[],
                 );
@@ -779,8 +783,12 @@ fn render_mario<'a>(
     if nega_mario {
         let pipeline = device.get_pipeline(
             "nega mario pipeline",
-            device.device.get_shader("shaders/mario.vert.spv", Default::default()),
-            device.device.get_shader("shaders/nega_mario.frag.spv", Default::default()),
+            device
+                .device
+                .get_shader("shaders/mario.vert.spv", Default::default()),
+            device
+                .device
+                .get_shader("shaders/nega_mario.frag.spv", Default::default()),
             RenderPipelineDesc::default(),
             buffer_layout,
         );
@@ -792,8 +800,12 @@ fn render_mario<'a>(
     } else {
         let pipeline = device.get_pipeline(
             "mario pipeline",
-            device.device.get_shader("shaders/mario.vert.spv", Default::default()),
-            device.device.get_shader("shaders/mario.frag.spv", Default::default()),
+            device
+                .device
+                .get_shader("shaders/mario.vert.spv", Default::default()),
+            device
+                .device
+                .get_shader("shaders/mario.frag.spv", Default::default()),
             RenderPipelineDesc::default(),
             buffer_layout,
         );
@@ -823,8 +835,12 @@ fn render_world<'a>(
 ) {
     let pipeline = device.get_pipeline(
         "world pipeline",
-        device.device.get_shader("shaders/world.vert.spv", Default::default()),
-        device.device.get_shader("shaders/world.frag.spv", Default::default()),
+        device
+            .device
+            .get_shader("shaders/world.vert.spv", Default::default()),
+        device
+            .device
+            .get_shader("shaders/world.frag.spv", Default::default()),
         RenderPipelineDesc::default(),
         &[
             VertexBufferLayout {
@@ -862,8 +878,12 @@ fn render_grass<'a>(
 ) {
     let pipeline = device.get_pipeline(
         "grass pipeline",
-        device.device.get_shader("shaders/point.vert.spv", Default::default()),
-        device.device.get_shader("shaders/flat_colour.frag.spv", Default::default()),
+        device
+            .device
+            .get_shader("shaders/point.vert.spv", Default::default()),
+        device
+            .device
+            .get_shader("shaders/flat_colour.frag.spv", Default::default()),
         RenderPipelineDesc {
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::LineList,

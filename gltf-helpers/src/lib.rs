@@ -1,5 +1,5 @@
 pub mod animation;
-use glam::{Vec3, Quat, Mat3, Mat4};
+use glam::{Mat3, Mat4, Quat, Vec3};
 use std::ops::Mul;
 
 #[derive(Clone, Copy, Debug, bytemuck::Zeroable, bytemuck::Pod)]

@@ -79,7 +79,49 @@ fn perspective_matrix_reversed(width: u32, height: u32) -> glam::Mat4 {
     )
 }
 
+struct XrSystem {
+    inner: web_sys::XrSystem,
+}
+
+impl XrSystem {
+    async fn get_properties(&self) -> XrProperties {
+        XrProperties {
+            inline_session_supported: wasm_bindgen_futures::JsFuture::from(
+                self.inner
+                    .is_session_supported(web_sys::XrSessionMode::Inline),
+            )
+            .await
+            .unwrap()
+            .as_bool()
+            .unwrap(),
+            immersive_vr_session_supported: wasm_bindgen_futures::JsFuture::from(
+                self.inner
+                    .is_session_supported(web_sys::XrSessionMode::ImmersiveVr),
+            )
+            .await
+            .unwrap()
+            .as_bool()
+            .unwrap(),
+        }
+    }
+
+    async fn get_session(&self, mode: web_sys::XrSessionMode) -> web_sys::XrSession {
+        wasm_bindgen_futures::JsFuture::from(self.inner.request_session(mode))
+            .await
+            .unwrap()
+            .into()
+    }
+}
+
+#[derive(Debug)]
+struct XrProperties {
+    inline_session_supported: bool,
+    immersive_vr_session_supported: bool,
+}
+
 async fn run() {
+
+
     #[cfg(feature = "wasm")]
     {
         std::panic::set_hook(Box::new(console_error_panic_hook::hook));
@@ -91,21 +133,164 @@ async fn run() {
         console_log::init_with_level(level).expect("could not initialize logger");
     }
 
+
     #[cfg(not(feature = "wasm"))]
     env_logger::init();
 
-    let event_loop = EventLoop::new();
+    let body = web_sys::window().unwrap().document().unwrap().body().unwrap();
 
-    let window = winit::window::WindowBuilder::new()
-        .build(&event_loop)
-        .expect("Failed to create window");
+    let canvas: web_sys::HtmlCanvasElement = web_sys::window()
+        .unwrap()
+        .document()
+        .unwrap()
+        .create_element("canvas")
+        .unwrap()
+        .unchecked_into();
 
-    #[cfg(feature = "wasm")]
-    {
-        // On wasm, append the canvas to the document body
-        wasm_web_helpers::append_canvas(&window);
+        body.append_child(&web_sys::Element::from(canvas.clone())).ok();
+
+    canvas.set_height(512);
+    canvas.set_width(512);
+
+    use wasm_bindgen::JsCast;
+
+    let webgl2_context = canvas
+        .get_context("webgl2")
+        .expect("Cannot create WebGL2 context")
+        .and_then(|context| context.dyn_into::<web_sys::WebGl2RenderingContext>().ok())
+        .expect("Cannot convert into WebGL2 context");
+
+
+
+    let xr = XrSystem {
+        inner: web_sys::window().unwrap().navigator().xr(),
+    };
+
+    log::error!("{:?}", xr.get_properties().await);
+
+    let sess = xr.get_session(web_sys::XrSessionMode::Inline).await;
+
+    log::error!(
+        "{:?}",
+        wasm_bindgen_futures::JsFuture::from(webgl2_context.make_xr_compatible()).await
+    );
+    let mut init = web_sys::XrWebGlLayerInit::new();
+    init.antialias(false);
+
+    let gl_layer =
+        web_sys::XrWebGlLayer::new_with_web_gl2_rendering_context_and_layer_init(&sess, &webgl2_context, &init).unwrap();
+
+    let mut render_state_init = web_sys::XrRenderStateInit::new();
+
+    render_state_init.base_layer(Some(&gl_layer));
+
+    sess.update_render_state_with_state(&render_state_init);
+
+    let ref_space: web_sys::XrReferenceSpace = wasm_bindgen_futures::JsFuture::from(sess.request_reference_space(web_sys::XrReferenceSpaceType::Viewer)).await.unwrap().into();
+
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let mut prev_time = Rc::new(Cell::new(0.0));
+
+    struct State {
+        prev_time: Cell<f32>,
+        //device: Device,
+        //queue: wgpu::Queue,
+        //surface: wgpu::Surface,
     }
 
+    let state = Rc::new(State {
+        prev_time: Cell::new(0.0),
+        //device,
+        //queue,
+        //surface,
+    });
+
+    let state_clone = state.clone();
+    sess.request_animation_frame(
+        &wasm_bindgen::closure::Closure::once_into_js(|t, frame| render(t, frame, state_clone))
+            .into(),
+    );
+
+    fn render(t: f32, frame: web_sys::XrFrame, state: Rc<State>) {
+        let diff = t - state.prev_time.get();
+        state.prev_time.set(t);
+
+        let state_clone = state.clone();
+        frame.session().request_animation_frame(
+            &wasm_bindgen::closure::Closure::once_into_js(|t, frame| render(t, frame, state_clone))
+                .into(),
+        );
+
+        let base_layer = frame.session().render_state().base_layer().unwrap();
+
+        log::info!("Rendering! framebuffer available: {}", base_layer.framebuffer().is_some());
+
+        //let framebuffer = frame.session().render_state().base_layer().unwrap().framebuffer().unwrap();
+
+        /*{
+            let frame = match state.surface.get_current_texture() {
+                Ok(frame) => frame,
+                Err(_) => {
+                    surface.configure(&state.device.inner, &state.config);
+                    surface
+                        .get_current_texture()
+                        .expect("Failed to acquire next surface texture!")
+                }
+            };
+            let view = frame
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+
+            let mut encoder =
+            state.device
+                    .inner
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("command encoder"),
+                    });
+
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("main render pass"),
+                color_attachments: &[
+                    wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.1,
+                                g: 0.2,
+                                b: 0.3,
+                                a: 1.0,
+                            }),
+                            store: true,
+                        },
+                    },
+                ],
+                depth_stencil_attachment: None,
+            });
+        }*/
+    }
+
+    println!("Dropping");
+
+
+    /*
+    let adapter = wgpu_hal::gles::web::AdapterContext {
+        glow_context: glow::Context::from_webgl2_context(webgl2_context.clone()),
+    };
+
+    let backend = wgpu::util::backend_bits_from_env().unwrap_or_else(wgpu::Backends::all);
+
+    let instance = wgpu::Instance::new(backend);
+
+    let adapter = unsafe { wgpu_hal::gles::Adapter::expose(adapter) }.unwrap();
+    let adapter = unsafe { instance.create_adapter_from_hal(adapter) };
+    */
+
+
+
+    /*
     let backend = wgpu::util::backend_bits_from_env().unwrap_or_else(wgpu::Backends::all);
 
     let instance = wgpu::Instance::new(backend);
@@ -140,6 +325,16 @@ async fn run() {
         )
         .await
         .expect("Unable to find a suitable GPU adapter!");
+
+        let mut device = Device::new(device);*/
+
+    /*
+    let reference_space: web_sys::XrReferenceSpace = wasm_bindgen_futures::JsFuture::from(sess.request_reference_space(web_sys::XrReferenceSpaceType::Local)).await.unwrap()
+        .into();
+    */
+
+
+    /*
 
     let (plane, _) = Model::new(include_bytes!("../plane.glb"), &device, "plane");
     let (capsule, mut player_joints) =
@@ -182,8 +377,6 @@ async fn run() {
 
     let mut staging_belt = wgpu::util::StagingBelt::new(1024);
 
-    let mut device = Device::new(device);
-
     let mut state = State::default();
 
     let player_height_offset = Vec3::new(0.0, 1.5, 0.0);
@@ -201,7 +394,7 @@ async fn run() {
     let uniform_buffer = device.create_resource(device.inner.create_buffer_init(
         &wgpu::util::BufferInitDescriptor {
             label: Some("uniform buffer"),
-            contents: bytemuck::bytes_of(&Uniforms {
+            contents: bytes_of(&Uniforms {
                 matrices: perspective_matrix * view_matrix,
                 player_position: Vec3::new(state.player_position.x, 0.0, state.player_position.y),
                 player_facing: state.player_facing,
@@ -219,7 +412,7 @@ async fn run() {
     let meteor_buffer = device.create_resource(device.inner.create_buffer_init(
         &wgpu::util::BufferInitDescriptor {
             label: Some("meteor buffer"),
-            contents: bytemuck::bytes_of(&MeteorGpuProps {
+            contents: bytes_of(&MeteorGpuProps {
                 position: state.meteor_props.position,
                 _padding: 0,
             }),
@@ -230,7 +423,7 @@ async fn run() {
     let bounce_sphere_buffer = device.create_resource(device.inner.create_buffer_init(
         &wgpu::util::BufferInitDescriptor {
             label: Some("bounce sphere buffer buffer"),
-            contents: bytemuck::bytes_of(&state.bounce_sphere_props),
+            contents: bytes_of(&state.bounce_sphere_props),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         },
     ));
@@ -357,7 +550,7 @@ async fn run() {
 
         let bytes = slice.get_mapped_range();
 
-        let vec4s: &[Vec4] = bytemuck::cast_slice(&bytes);
+        let vec4s: &[Vec4] = cast_slice(&bytes);
 
         HeightMap {
             floats: vec4s.iter().map(|vec4| vec4.x).collect(),
@@ -442,7 +635,7 @@ async fn run() {
     let forest_points = device.create_resource(device.inner.create_buffer_init(
         &wgpu::util::BufferInitDescriptor {
             label: Some("forest buffer"),
-            contents: bytemuck::cast_slice(&forest_points),
+            contents: cast_slice(&forest_points),
             usage: wgpu::BufferUsages::VERTEX,
         },
     ));
@@ -450,7 +643,7 @@ async fn run() {
     let house_points = device.create_resource(device.inner.create_buffer_init(
         &wgpu::util::BufferInitDescriptor {
             label: Some("house buffer"),
-            contents: bytemuck::cast_slice(&house_points),
+            contents: cast_slice(&house_points),
             usage: wgpu::BufferUsages::VERTEX,
         },
     ));
@@ -599,13 +792,13 @@ async fn run() {
             queue.write_buffer(
                 &joint_transforms_buffer,
                 0,
-                bytemuck::cast_slice(&joint_transforms),
+                cast_slice(&joint_transforms),
             );
 
             queue.write_buffer(
                 &meteor_buffer,
                 0,
-                bytemuck::bytes_of(&MeteorGpuProps {
+                bytes_of(&MeteorGpuProps {
                     position: state.meteor_props.position,
                     _padding: 0,
                 }),
@@ -614,7 +807,7 @@ async fn run() {
             queue.write_buffer(
                 &bounce_sphere_buffer,
                 0,
-                bytemuck::bytes_of(&state.bounce_sphere_props),
+                bytes_of(&state.bounce_sphere_props),
             );
 
             let player_position_3d = state.player_position_3d(&heightmap);
@@ -622,7 +815,7 @@ async fn run() {
             queue.write_buffer(
                 &uniform_buffer,
                 0,
-                bytemuck::bytes_of(&Uniforms {
+                bytes_of(&Uniforms {
                     matrices: {
                         let view_matrix = {
                             Mat4::look_at_rh(
@@ -1169,7 +1362,20 @@ async fn run() {
             device.flush();
         }
         _ => {}
-    });
+    });*/
+}
+
+fn bytes_of<T>(object: &T) -> &[u8] {
+    unsafe { std::slice::from_raw_parts(object as *const T as *const u8, std::mem::size_of::<T>()) }
+}
+
+fn cast_slice<T, E>(slice: &[T]) -> &[E] {
+    unsafe {
+        std::slice::from_raw_parts(
+            slice.as_ptr() as *const E,
+            (std::mem::size_of::<T>() * slice.len()) / std::mem::size_of::<E>(),
+        )
+    }
 }
 
 #[derive(Default)]

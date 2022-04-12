@@ -191,8 +191,7 @@ async fn run() {
 
             {
                 let formats = &[config.format];
-                let device =
-                    device.with_formats(formats, Some(wgpu::TextureFormat::Depth32Float));
+                let device = device.with_formats(formats, Some(wgpu::TextureFormat::Depth32Float));
 
                 let pipeline = device.get_pipeline(
                     "blit pipeline",

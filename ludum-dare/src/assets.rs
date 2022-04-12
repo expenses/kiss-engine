@@ -3,7 +3,7 @@ use glam::Vec3;
 use kiss_engine_wgpu::{Device, Resource, Texture};
 use wgpu::util::DeviceExt;
 
-use gltf_helpers::{NodeTree, animation, Similarity};
+use gltf_helpers::{animation, NodeTree, Similarity};
 
 pub(crate) struct Model {
     positions: wgpu::Buffer,
@@ -114,7 +114,8 @@ impl Model {
             .read_inverse_bind_matrices()
             .expect("Missing inverse bind matrices")
             .map(|matrix| {
-                let (translation, rotation, scale) = gltf::scene::Transform::Matrix { matrix }.decomposed();
+                let (translation, rotation, scale) =
+                    gltf::scene::Transform::Matrix { matrix }.decomposed();
                 Similarity::new_from_gltf(translation, rotation, scale)
             })
             .collect()

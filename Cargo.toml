@@ -12,5 +12,10 @@ members = [
     "vk-test",
 ]
 
-[patch."https://github.com/gfx-rs/naga"]
-#naga = "0.8.5"
+[patch.crates-io]
+web-sys = { path = "../wasm-bindgen/crates/web-sys" }
+wasm-bindgen = { path = "../wasm-bindgen" }
+wasm-bindgen-shared = { path = "../wasm-bindgen/crates/shared" }
+js-sys = { path = "../wasm-bindgen/crates/js-sys" }
+wgpu = { path = "../../wgpu/wgpu" }
+wgpu-hal = { path = "../../wgpu/wgpu-hal" }
