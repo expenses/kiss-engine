@@ -161,7 +161,6 @@ async fn run() {
 
     let (meteor, _) = Model::new(include_bytes!("../meteor.glb"), &device, "meteor");
 
-
     let mut config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: surface
@@ -348,7 +347,6 @@ async fn run() {
         map_future.await.expect("Mapping height map slice failed");
 
         let bytes = slice.get_mapped_range();
-
 
         fn cast_slice<T, F>(slice: &[T]) -> &[F] {
             unsafe {
@@ -635,7 +633,11 @@ async fn run() {
                 )
                 .collect();
 
-            queue.write_buffer(&joint_transforms_buffer, 0, bytemuck::cast_slice(&joint_transforms));
+            queue.write_buffer(
+                &joint_transforms_buffer,
+                0,
+                bytemuck::cast_slice(&joint_transforms),
+            );
 
             queue.write_buffer(
                 &meteor_buffer,
@@ -725,21 +727,50 @@ async fn run() {
             label: Some("depth texture"),
         });
 
+        let opaque_texture = device.get_texture(&wgpu::TextureDescriptor {
+            size: wgpu::Extent3d {
+                width: config.width,
+                height: config.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            label: Some("opaque texture"),
+        });
+
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("main render pass"),
-            color_attachments: &[wgpu::RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.1,
-                        g: 0.2,
-                        b: 0.3,
-                        a: 1.0,
-                    }),
-                    store: true,
+            color_attachments: &[
+                wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.1,
+                            g: 0.2,
+                            b: 0.3,
+                            a: 1.0,
+                        }),
+                        store: true,
+                    },
                 },
-            }],
+                wgpu::RenderPassColorAttachment {
+                    view: &opaque_texture.view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.1,
+                            g: 0.2,
+                            b: 0.3,
+                            a: 1.0,
+                        }),
+                        store: true,
+                    },
+                },
+            ],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: &depth_texture.view,
                 depth_ops: Some(wgpu::Operations {
@@ -759,7 +790,7 @@ async fn run() {
         };
 
         {
-            let formats = &[config.format];
+            let formats = &[config.format, wgpu::TextureFormat::Rgba8UnormSrgb];
 
             let device = device.with_formats(formats, Some(wgpu::TextureFormat::Depth32Float));
 
@@ -1045,31 +1076,62 @@ async fn run() {
                     house.render(&mut render_pass, num_house_points);
                 }
             }
+        }
+
+        drop(render_pass);
+
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("transmissiion render pass"),
+            color_attachments: &[wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: true,
+                },
+            }],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &depth_texture.view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: true,
+                }),
+                stencil_ops: None,
+            }),
+        });
+
+        {
+            let formats = &[config.format];
+
+            let device = device.with_formats(formats, Some(wgpu::TextureFormat::Depth32Float));
 
             let pipeline = device.get_pipeline(
-                "meteor outline pipeline",
+                "water pipeline",
                 device.device.get_shader(
-                    "shaders/compiled/meteor_outline.vert.spv",
+                    "shaders/compiled/plane.vert.spv",
                     #[cfg(feature = "standalone")]
-                    include_bytes!("../shaders/compiled/meteor_outline.vert.spv"),
+                    include_bytes!("../shaders/compiled/plane.vert.spv"),
                     Default::default(),
                 ),
                 device.device.get_shader(
-                    "shaders/compiled/meteor_outline.frag.spv",
+                    "shaders/compiled/water.frag.spv",
                     #[cfg(feature = "standalone")]
-                    include_bytes!("../shaders/compiled/meteor_outline.frag.spv"),
-                    Default::default(),
+                    include_bytes!("../shaders/compiled/water.frag.spv"),
+                    BindGroupLayoutSettings {
+                        allow_texture_filtering: false,
+                    },
                 ),
                 RenderPipelineDesc {
                     depth_compare: wgpu::CompareFunction::Less,
-
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     ..Default::default()
                 },
                 BASIC_FORMAT,
             );
 
-            render_pass.set_pipeline(&pipeline.pipeline);
+            let height_map = device
+                .device
+                .try_get_cached_texture("height map")
+                .expect("Failed to get cached texture.");
 
             for (i, viewport) in viewports.iter().enumerate() {
                 render_pass.set_viewport(
@@ -1082,19 +1144,73 @@ async fn run() {
                 );
 
                 let bind_group = device.get_bind_group(
-                    ("meteor outline", i),
+                    ("water", i),
                     pipeline,
                     &[
                         uniform_buffer(i),
-                        BindingResource::Buffer(&meteor_buffer),
+                        BindingResource::Texture(opaque_texture),
                         BindingResource::Sampler(&sampler),
-                        BindingResource::Texture(&meteor_tex),
+                        BindingResource::Texture(height_map),
+                        BindingResource::Buffer(&meteor_buffer),
                     ],
                 );
 
+                render_pass.set_pipeline(&pipeline.pipeline);
                 render_pass.set_bind_group(0, bind_group, &[]);
 
-                meteor.render(&mut render_pass, 1);
+                water.render(&mut render_pass, 1);
+            }
+
+            {
+                let pipeline = device.get_pipeline(
+                    "meteor outline pipeline",
+                    device.device.get_shader(
+                        "shaders/compiled/meteor_outline.vert.spv",
+                        #[cfg(feature = "standalone")]
+                        include_bytes!("../shaders/compiled/meteor_outline.vert.spv"),
+                        Default::default(),
+                    ),
+                    device.device.get_shader(
+                        "shaders/compiled/meteor_outline.frag.spv",
+                        #[cfg(feature = "standalone")]
+                        include_bytes!("../shaders/compiled/meteor_outline.frag.spv"),
+                        Default::default(),
+                    ),
+                    RenderPipelineDesc {
+                        depth_compare: wgpu::CompareFunction::Less,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        ..Default::default()
+                    },
+                    BASIC_FORMAT,
+                );
+
+                render_pass.set_pipeline(&pipeline.pipeline);
+
+                for (i, viewport) in viewports.iter().enumerate() {
+                    render_pass.set_viewport(
+                        viewport.x,
+                        viewport.y,
+                        viewport.width,
+                        viewport.height,
+                        0.0,
+                        1.0,
+                    );
+
+                    let bind_group = device.get_bind_group(
+                        ("meteor outline", i),
+                        pipeline,
+                        &[
+                            uniform_buffer(i),
+                            BindingResource::Buffer(&meteor_buffer),
+                            BindingResource::Sampler(&sampler),
+                            BindingResource::Texture(&meteor_tex),
+                        ],
+                    );
+
+                    render_pass.set_bind_group(0, bind_group, &[]);
+
+                    meteor.render(&mut render_pass, 1);
+                }
             }
 
             let pipeline = device.get_pipeline(
@@ -1114,7 +1230,6 @@ async fn run() {
                 RenderPipelineDesc {
                     depth_compare: wgpu::CompareFunction::Less,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-
                     ..Default::default()
                 },
                 BASIC_FORMAT,

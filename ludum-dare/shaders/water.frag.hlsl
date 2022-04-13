@@ -27,7 +27,7 @@ float4 main(In input): SV_Target0 {
     float3 transmitted_light = opaque_tex.Sample(tex_sampler, input.coord.xy / uniforms.window_size).xyz;
 
     float attenuation_distance = 0.5;
-    float transmission_distance = abs(-height);
+    float transmission_distance = max(abs(-height), 2.0 / 3.0);
     float3 attenuation_color = float3(0.25, 0.25, 1.0);
 
     attenuation_color *= shadow_factor(input.position, meteor_position) * 0.5 + 0.5;
