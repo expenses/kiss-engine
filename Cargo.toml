@@ -13,9 +13,7 @@ members = [
 ]
 
 [patch.crates-io]
-web-sys = { path = "../wasm-bindgen/crates/web-sys" }
-wasm-bindgen = { path = "../wasm-bindgen" }
-wasm-bindgen-shared = { path = "../wasm-bindgen/crates/shared" }
-js-sys = { path = "../wasm-bindgen/crates/js-sys" }
-wgpu = { path = "../../wgpu/wgpu" }
-wgpu-hal = { path = "../../wgpu/wgpu-hal" }
+web-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes" }
+wasm-bindgen = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes" }
+wasm-bindgen-shared = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes" }
+js-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes" }

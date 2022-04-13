@@ -394,16 +394,16 @@ struct TextureWithExtent {
     extent: wgpu::Extent3d,
 }
 
-pub struct Device {
+pub struct Device<BK> {
     pub inner: Arc<wgpu::Device>,
     pipelines: CacheMap<&'static str, RenderPipeline>,
-    bind_groups: CacheMap<&'static str, BindGroup>,
+    bind_groups: CacheMap<BK, BindGroup>,
     shaders: CacheMap<&'static str, Arc<ReloadableShader>>,
     textures: CacheMap<&'static str, TextureWithExtent>,
     pub next_resource_id: std::sync::atomic::AtomicU32,
 }
 
-impl Device {
+impl<BK: Eq + Clone + std::hash::Hash> Device<BK> {
     pub fn new(device: wgpu::Device) -> Self {
         Self {
             inner: Arc::new(device),
@@ -529,20 +529,22 @@ impl Device {
 
     fn get_bind_group<F: Fn() -> wgpu::BindGroup>(
         &self,
-        name: &'static str,
+        key: BK,
         func: F,
         ids: &[u32],
     ) -> &wgpu::BindGroup {
-        let bind_group = self.bind_groups.get_or_insert_with(name, || BindGroup {
-            inner: func(),
-            ids: ids.to_vec(),
-        });
+        let bind_group = self
+            .bind_groups
+            .get_or_insert_with(key.clone(), || BindGroup {
+                inner: func(),
+                ids: ids.to_vec(),
+            });
 
         if bind_group.ids != ids {
             &self
                 .bind_groups
                 .insert_or_replace(
-                    name,
+                    key,
                     BindGroup {
                         inner: func(),
                         ids: ids.to_vec(),
@@ -574,7 +576,7 @@ impl Device {
         &self,
         attachment_texture_formats: &'formats [wgpu::TextureFormat],
         depth_stencil_attachment_format: Option<wgpu::TextureFormat>,
-    ) -> DeviceWithFormats<'_, 'formats> {
+    ) -> DeviceWithFormats<'_, 'formats, BK> {
         DeviceWithFormats {
             device: self,
             attachment_texture_formats,
@@ -613,13 +615,15 @@ impl Device {
     }
 }
 
-pub struct DeviceWithFormats<'dev, 'formats> {
-    pub device: &'dev Device,
+pub struct DeviceWithFormats<'dev, 'formats, BK> {
+    pub device: &'dev Device<BK>,
     attachment_texture_formats: &'formats [wgpu::TextureFormat],
     depth_stencil_attachment_format: Option<wgpu::TextureFormat>,
 }
 
-impl<'dev, 'formats> DeviceWithFormats<'dev, 'formats> {
+impl<'dev, 'formats, BK: Eq + Clone + std::hash::Hash + std::fmt::Debug>
+    DeviceWithFormats<'dev, 'formats, BK>
+{
     pub fn get_pipeline(
         &self,
         name: &'static str,
@@ -641,7 +645,7 @@ impl<'dev, 'formats> DeviceWithFormats<'dev, 'formats> {
 
     pub fn get_bind_group(
         &self,
-        name: &'static str,
+        key: BK,
         pipeline: &RenderPipeline,
         binding_resources: &[BindingResource],
     ) -> &'dev wgpu::BindGroup {
@@ -651,12 +655,12 @@ impl<'dev, 'formats> DeviceWithFormats<'dev, 'formats> {
             .collect();
 
         self.device.get_bind_group(
-            name,
+            key.clone(),
             || {
                 self.device
                     .inner
                     .create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some(&format!("{} bind group", name)),
+                        label: Some(&format!("{:?} bind group", key)),
                         layout: &pipeline.bind_group_layout,
                         entries: &{
                             binding_resources

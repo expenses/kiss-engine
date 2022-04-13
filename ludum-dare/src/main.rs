@@ -13,13 +13,7 @@ mod assets;
 use assets::{load_image, Model};
 
 use wgpu::util::DeviceExt;
-use winit::{
-    event::{self, VirtualKeyCode, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
-};
-
-pub(crate) const Z_NEAR: f32 = 0.01;
-pub(crate) const Z_FAR: f32 = 50_000.0;
+use winit::event::VirtualKeyCode;
 
 const BASIC_FORMAT: &[VertexBufferLayout] = &[
     VertexBufferLayout {
@@ -62,82 +56,32 @@ const INSTANCED_FORMAT: &[VertexBufferLayout] = &[
     },
 ];
 
-fn perspective_matrix_reversed(width: u32, height: u32) -> glam::Mat4 {
-    let aspect_ratio = width as f32 / height as f32;
-    let vertical_fov = 59.0_f32.to_radians();
+struct RawWindowHandle;
 
-    let focal_length_y = 1.0 / (vertical_fov / 2.0).tan();
-    let focal_length_x = focal_length_y / aspect_ratio;
+unsafe impl raw_window_handle::HasRawWindowHandle for RawWindowHandle {
+    fn raw_window_handle(&self) -> raw_window_handle::RawWindowHandle {
+        let mut web = raw_window_handle::WebHandle::empty();
+        web.id = 666;
 
-    let near_minus_far = Z_NEAR - Z_FAR;
-
-    glam::Mat4::from_cols(
-        glam::Vec4::new(focal_length_x, 0.0, 0.0, 0.0),
-        glam::Vec4::new(0.0, focal_length_y, 0.0, 0.0),
-        glam::Vec4::new(0.0, 0.0, -Z_FAR / near_minus_far - 1.0, -1.0),
-        glam::Vec4::new(0.0, 0.0, -Z_NEAR * Z_FAR / near_minus_far, 0.0),
-    )
-}
-
-struct XrSystem {
-    inner: web_sys::XrSystem,
-}
-
-impl XrSystem {
-    async fn get_properties(&self) -> XrProperties {
-        XrProperties {
-            inline_session_supported: wasm_bindgen_futures::JsFuture::from(
-                self.inner
-                    .is_session_supported(web_sys::XrSessionMode::Inline),
-            )
-            .await
-            .unwrap()
-            .as_bool()
-            .unwrap(),
-            immersive_vr_session_supported: wasm_bindgen_futures::JsFuture::from(
-                self.inner
-                    .is_session_supported(web_sys::XrSessionMode::ImmersiveVr),
-            )
-            .await
-            .unwrap()
-            .as_bool()
-            .unwrap(),
-        }
+        raw_window_handle::RawWindowHandle::Web(web)
     }
-
-    async fn get_session(&self, mode: web_sys::XrSessionMode) -> web_sys::XrSession {
-        wasm_bindgen_futures::JsFuture::from(self.inner.request_session(mode))
-            .await
-            .unwrap()
-            .into()
-    }
-}
-
-#[derive(Debug)]
-struct XrProperties {
-    inline_session_supported: bool,
-    immersive_vr_session_supported: bool,
 }
 
 async fn run() {
-
-
     #[cfg(feature = "wasm")]
     {
         std::panic::set_hook(Box::new(console_error_panic_hook::hook));
 
         let level: log::Level = wasm_web_helpers::parse_url_query_string_from_window("RUST_LOG")
-            .map(|x| x.parse().ok())
-            .flatten()
+            .and_then(|x| x.parse().ok())
             .unwrap_or(log::Level::Info);
         console_log::init_with_level(level).expect("could not initialize logger");
     }
 
-
     #[cfg(not(feature = "wasm"))]
     env_logger::init();
 
-    let body = web_sys::window().unwrap().document().unwrap().body().unwrap();
+    use wasm_bindgen::JsCast;
 
     let canvas: web_sys::HtmlCanvasElement = web_sys::window()
         .unwrap()
@@ -147,155 +91,32 @@ async fn run() {
         .unwrap()
         .unchecked_into();
 
-        body.append_child(&web_sys::Element::from(canvas.clone())).ok();
+    let body = web_sys::window()
+        .unwrap()
+        .document()
+        .unwrap()
+        .body()
+        .unwrap();
 
-    canvas.set_height(512);
-    canvas.set_width(512);
+    canvas.set_attribute("data-raw-handle", "666").unwrap();
 
-    use wasm_bindgen::JsCast;
+    body.append_child(&web_sys::Element::from(canvas.clone()))
+        .unwrap();
 
-    let webgl2_context = canvas
-        .get_context("webgl2")
-        .expect("Cannot create WebGL2 context")
-        .and_then(|context| context.dyn_into::<web_sys::WebGl2RenderingContext>().ok())
-        .expect("Cannot convert into WebGL2 context");
-
-
-
-    let xr = XrSystem {
-        inner: web_sys::window().unwrap().navigator().xr(),
-    };
-
-    log::error!("{:?}", xr.get_properties().await);
-
-    let sess = xr.get_session(web_sys::XrSessionMode::Inline).await;
-
-    log::error!(
-        "{:?}",
-        wasm_bindgen_futures::JsFuture::from(webgl2_context.make_xr_compatible()).await
-    );
-    let mut init = web_sys::XrWebGlLayerInit::new();
-    init.antialias(false);
-
-    let gl_layer =
-        web_sys::XrWebGlLayer::new_with_web_gl2_rendering_context_and_layer_init(&sess, &webgl2_context, &init).unwrap();
-
-    let mut render_state_init = web_sys::XrRenderStateInit::new();
-
-    render_state_init.base_layer(Some(&gl_layer));
-
-    sess.update_render_state_with_state(&render_state_init);
-
-    let ref_space: web_sys::XrReferenceSpace = wasm_bindgen_futures::JsFuture::from(sess.request_reference_space(web_sys::XrReferenceSpaceType::Viewer)).await.unwrap().into();
-
-    use std::cell::Cell;
-    use std::rc::Rc;
-
-    let mut prev_time = Rc::new(Cell::new(0.0));
-
-    struct State {
-        prev_time: Cell<f32>,
-        //device: Device,
-        //queue: wgpu::Queue,
-        //surface: wgpu::Surface,
-    }
-
-    let state = Rc::new(State {
-        prev_time: Cell::new(0.0),
-        //device,
-        //queue,
-        //surface,
-    });
-
-    let state_clone = state.clone();
-    sess.request_animation_frame(
-        &wasm_bindgen::closure::Closure::once_into_js(|t, frame| render(t, frame, state_clone))
-            .into(),
-    );
-
-    fn render(t: f32, frame: web_sys::XrFrame, state: Rc<State>) {
-        let diff = t - state.prev_time.get();
-        state.prev_time.set(t);
-
-        let state_clone = state.clone();
-        frame.session().request_animation_frame(
-            &wasm_bindgen::closure::Closure::once_into_js(|t, frame| render(t, frame, state_clone))
-                .into(),
-        );
-
-        let base_layer = frame.session().render_state().base_layer().unwrap();
-
-        log::info!("Rendering! framebuffer available: {}", base_layer.framebuffer().is_some());
-
-        //let framebuffer = frame.session().render_state().base_layer().unwrap().framebuffer().unwrap();
-
-        /*{
-            let frame = match state.surface.get_current_texture() {
-                Ok(frame) => frame,
-                Err(_) => {
-                    surface.configure(&state.device.inner, &state.config);
-                    surface
-                        .get_current_texture()
-                        .expect("Failed to acquire next surface texture!")
-                }
-            };
-            let view = frame
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
-
-            let mut encoder =
-            state.device
-                    .inner
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("command encoder"),
-                    });
-
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("main render pass"),
-                color_attachments: &[
-                    wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.1,
-                                g: 0.2,
-                                b: 0.3,
-                                a: 1.0,
-                            }),
-                            store: true,
-                        },
-                    },
-                ],
-                depth_stencil_attachment: None,
-            });
-        }*/
-    }
-
-    println!("Dropping");
-
-
-    /*
-    let adapter = wgpu_hal::gles::web::AdapterContext {
-        glow_context: glow::Context::from_webgl2_context(webgl2_context.clone()),
+    #[cfg(target_arch = "wasm32")]
+    let webgl2_context = {
+        canvas
+            .get_context("webgl2")
+            .unwrap()
+            .unwrap()
+            .dyn_into::<web_sys::WebGl2RenderingContext>()
+            .unwrap()
     };
 
     let backend = wgpu::util::backend_bits_from_env().unwrap_or_else(wgpu::Backends::all);
 
     let instance = wgpu::Instance::new(backend);
-
-    let adapter = unsafe { wgpu_hal::gles::Adapter::expose(adapter) }.unwrap();
-    let adapter = unsafe { instance.create_adapter_from_hal(adapter) };
-    */
-
-
-
-    /*
-    let backend = wgpu::util::backend_bits_from_env().unwrap_or_else(wgpu::Backends::all);
-
-    let instance = wgpu::Instance::new(backend);
-    let size = window.inner_size();
-    let surface = unsafe { instance.create_surface(&window) };
+    let surface = unsafe { instance.create_surface(&RawWindowHandle) };
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -326,16 +147,6 @@ async fn run() {
         .await
         .expect("Unable to find a suitable GPU adapter!");
 
-        let mut device = Device::new(device);*/
-
-    /*
-    let reference_space: web_sys::XrReferenceSpace = wasm_bindgen_futures::JsFuture::from(sess.request_reference_space(web_sys::XrReferenceSpaceType::Local)).await.unwrap()
-        .into();
-    */
-
-
-    /*
-
     let (plane, _) = Model::new(include_bytes!("../plane.glb"), &device, "plane");
     let (capsule, mut player_joints) =
         Model::new(include_bytes!("../fire_giant.glb"), &device, "capsule");
@@ -350,17 +161,14 @@ async fn run() {
 
     let (meteor, _) = Model::new(include_bytes!("../meteor.glb"), &device, "meteor");
 
-    let mut perspective_matrix = perspective_matrix_reversed(size.width, size.height);
-
-    let size = window.inner_size();
 
     let mut config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: surface
             .get_preferred_format(&adapter)
             .expect("Failed to get preferred surface format"),
-        width: size.width,
-        height: size.height,
+        width: 512,
+        height: 512,
         present_mode: wgpu::PresentMode::Fifo,
     };
     surface.configure(&device, &config);
@@ -377,34 +185,25 @@ async fn run() {
 
     let mut staging_belt = wgpu::util::StagingBelt::new(1024);
 
+    let mut device = Device::new(device);
+
     let mut state = State::default();
+    state.lost = true;
 
     let player_height_offset = Vec3::new(0.0, 1.5, 0.0);
-
-    let view_matrix = {
-        Mat4::look_at_rh(
-            Vec3::new(state.player_position.x, 0.0, state.player_position.y)
-                + player_height_offset
-                + state.orbit.as_vector(),
-            Vec3::new(state.player_position.x, 1.0, state.player_position.y) + player_height_offset,
-            Vec3::Y,
-        )
-    };
 
     let uniform_buffer = device.create_resource(device.inner.create_buffer_init(
         &wgpu::util::BufferInitDescriptor {
             label: Some("uniform buffer"),
-            contents: bytes_of(&Uniforms {
-                matrices: perspective_matrix * view_matrix,
-                player_position: Vec3::new(state.player_position.x, 0.0, state.player_position.y),
-                player_facing: state.player_facing,
-                camera_position: Vec3::new(state.player_position.x, 0.0, state.player_position.y)
-                    + player_height_offset
-                    + state.orbit.as_vector(),
-                time: state.time,
-                window_size: Vec2::new(config.width as f32, config.height as f32),
-                ..Default::default()
-            }),
+            contents: bytemuck::bytes_of(&Uniforms::default()),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        },
+    ));
+
+    let right_uniform_buffer = device.create_resource(device.inner.create_buffer_init(
+        &wgpu::util::BufferInitDescriptor {
+            label: Some("right uniform buffer"),
+            contents: bytemuck::bytes_of(&Uniforms::default()),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         },
     ));
@@ -412,7 +211,7 @@ async fn run() {
     let meteor_buffer = device.create_resource(device.inner.create_buffer_init(
         &wgpu::util::BufferInitDescriptor {
             label: Some("meteor buffer"),
-            contents: bytes_of(&MeteorGpuProps {
+            contents: bytemuck::bytes_of(&MeteorGpuProps {
                 position: state.meteor_props.position,
                 _padding: 0,
             }),
@@ -423,7 +222,7 @@ async fn run() {
     let bounce_sphere_buffer = device.create_resource(device.inner.create_buffer_init(
         &wgpu::util::BufferInitDescriptor {
             label: Some("bounce sphere buffer buffer"),
-            contents: bytes_of(&state.bounce_sphere_props),
+            contents: bytemuck::bytes_of(&state.bounce_sphere_props),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         },
     ));
@@ -502,7 +301,7 @@ async fn run() {
             BASIC_FORMAT,
         );
 
-        let bind_group = device.get_bind_group("bake height map", pipeline, &[]);
+        let bind_group = device.get_bind_group(("bake height map", 0), pipeline, &[]);
 
         render_pass.set_pipeline(&pipeline.pipeline);
         render_pass.set_bind_group(0, bind_group, &[]);
@@ -550,6 +349,17 @@ async fn run() {
 
         let bytes = slice.get_mapped_range();
 
+
+        fn cast_slice<T, F>(slice: &[T]) -> &[F] {
+            unsafe {
+                std::slice::from_raw_parts(
+                    slice.as_ptr() as *const F,
+                    (slice.len() * std::mem::size_of::<T>()) / std::mem::size_of::<F>(),
+                )
+            }
+        }
+
+        // We get bytemuck alignment issues for this.
         let vec4s: &[Vec4] = cast_slice(&bytes);
 
         HeightMap {
@@ -635,7 +445,7 @@ async fn run() {
     let forest_points = device.create_resource(device.inner.create_buffer_init(
         &wgpu::util::BufferInitDescriptor {
             label: Some("forest buffer"),
-            contents: cast_slice(&forest_points),
+            contents: bytemuck::cast_slice(&forest_points),
             usage: wgpu::BufferUsages::VERTEX,
         },
     ));
@@ -643,7 +453,7 @@ async fn run() {
     let house_points = device.create_resource(device.inner.create_buffer_init(
         &wgpu::util::BufferInitDescriptor {
             label: Some("house buffer"),
-            contents: cast_slice(&house_points),
+            contents: bytemuck::cast_slice(&house_points),
             usage: wgpu::BufferUsages::VERTEX,
         },
     ));
@@ -719,59 +529,95 @@ async fn run() {
     let joint_transforms_buffer =
         device.create_resource(device.inner.create_buffer(&wgpu::BufferDescriptor {
             label: Some("player joint transforms"),
-            size: (capsule.joint_indices_to_node_indices.len() * std::mem::size_of::<gltf_helpers::Similarity>())
-                as u64,
+            size: (capsule.joint_indices_to_node_indices.len()
+                * std::mem::size_of::<gltf_helpers::Similarity>()) as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
             mapped_at_creation: false,
         }));
 
-    event_loop.run(move |event, _, control_flow| match event {
-        event::Event::WindowEvent {
-            event:
-                WindowEvent::Resized(size)
-                | WindowEvent::ScaleFactorChanged {
-                    new_inner_size: &mut size,
-                    ..
-                },
-            ..
-        } => {
-            println!("Resizing to {:?}", size);
-            config.width = size.width.max(1);
-            config.height = size.height.max(1);
-            surface.configure(&device.inner, &config);
-            perspective_matrix = perspective_matrix_reversed(size.width, size.height);
+    let navigator: web_sys::Navigator = web_sys::window().unwrap().navigator();
+
+    let xr = navigator.xr();
+
+    /*
+    let button: web_sys::HtmlButtonElement = web_sys::window()
+    .unwrap()
+    .document()
+    .unwrap()
+    .create_element("button")
+    .unwrap()
+    .unchecked_into();
+
+    body.append_child(&web_sys::Element::from(button.clone()))
+        .unwrap();
+
+    wasm_bindgen_futures::JsFuture::from(js_sys::Promise::new(&mut |resolve, reject| {
+        button.set_onclick(Some(&resolve))
+    }))
+    .await;
+    */
+
+    let xr_session: web_sys::XrSession = wasm_bindgen_futures::JsFuture::from(
+        xr.request_session(web_sys::XrSessionMode::ImmersiveVr),
+    )
+    .await
+    .unwrap()
+    .into();
+
+    let xr_gl_layer =
+        web_sys::XrWebGlLayer::new_with_web_gl2_rendering_context(&xr_session, &webgl2_context)
+            .unwrap();
+
+    let mut render_state_init = web_sys::XrRenderStateInit::new();
+    render_state_init.base_layer(Some(&xr_gl_layer));
+    xr_session.update_render_state_with_state(&render_state_init);
+
+    let reference_space: web_sys::XrReferenceSpace = wasm_bindgen_futures::JsFuture::from(
+        xr_session.request_reference_space(web_sys::XrReferenceSpaceType::Local),
+    )
+    .await
+    .unwrap()
+    .into();
+
+    loop {
+        let (xr_session, pose, _time) = get_animation_frame(&xr_session, &reference_space).await;
+
+        let views: Vec<web_sys::XrView> = pose.views().iter().map(|view| view.into()).collect();
+
+        struct Viewport {
+            x: f32,
+            y: f32,
+            width: f32,
+            height: f32,
         }
-        event::Event::WindowEvent { event, .. } => match event {
-            #[cfg(not(feature = "wasm"))]
-            WindowEvent::KeyboardInput {
-                input:
-                    event::KeyboardInput {
-                        virtual_keycode: Some(event::VirtualKeyCode::Escape),
-                        state: event::ElementState::Pressed,
-                        ..
-                    },
-                ..
-            }
-            | WindowEvent::CloseRequested => {
-                *control_flow = ControlFlow::Exit;
-            }
-            WindowEvent::KeyboardInput {
-                input:
-                    event::KeyboardInput {
-                        virtual_keycode: Some(key),
-                        state: key_state,
-                        ..
-                    },
-                ..
-            } => {
-                state.handle_key(key, key_state == event::ElementState::Pressed);
-            }
-            WindowEvent::Focused(false) => {
-                state.kbd = Default::default();
-            }
-            _ => {}
-        },
-        event::Event::MainEventsCleared => {
+
+        let viewports: Vec<_> = views
+            .iter()
+            .map(|view| {
+                let viewport = xr_gl_layer.get_viewport(view).unwrap();
+
+                Viewport {
+                    x: viewport.x() as f32,
+                    y: viewport.y() as f32,
+                    width: viewport.width() as f32,
+                    height: viewport.height() as f32,
+                }
+            })
+            .collect();
+
+        let base_layer = xr_session.render_state().base_layer().unwrap();
+
+        if config.width != base_layer.framebuffer_width()
+            || config.height != base_layer.framebuffer_height()
+        {
+            config.width = base_layer.framebuffer_width();
+            config.height = base_layer.framebuffer_height();
+
+            surface.configure(&device.inner, &config);
+        }
+
+        // update
+        {
             let delta_time = 1.0 / 60.0;
 
             state.update(delta_time, &heightmap, &capsule, &mut rng);
@@ -789,16 +635,12 @@ async fn run() {
                 )
                 .collect();
 
-            queue.write_buffer(
-                &joint_transforms_buffer,
-                0,
-                cast_slice(&joint_transforms),
-            );
+            queue.write_buffer(&joint_transforms_buffer, 0, bytemuck::cast_slice(&joint_transforms));
 
             queue.write_buffer(
                 &meteor_buffer,
                 0,
-                bytes_of(&MeteorGpuProps {
+                bytemuck::bytes_of(&MeteorGpuProps {
                     position: state.meteor_props.position,
                     _padding: 0,
                 }),
@@ -807,26 +649,24 @@ async fn run() {
             queue.write_buffer(
                 &bounce_sphere_buffer,
                 0,
-                bytes_of(&state.bounce_sphere_props),
+                bytemuck::bytes_of(&state.bounce_sphere_props),
             );
 
             let player_position_3d = state.player_position_3d(&heightmap);
 
+            let parse_matrix = |vec| Mat4::from_cols_array(&<[f32; 16]>::try_from(vec).unwrap());
+
+            let left_proj = parse_matrix(views[0].projection_matrix());
+            let right_proj = parse_matrix(views[1].projection_matrix());
+
+            let left_inv = parse_matrix(views[0].transform().inverse().matrix());
+            let right_inv = parse_matrix(views[1].transform().inverse().matrix());
+
             queue.write_buffer(
                 &uniform_buffer,
                 0,
-                bytes_of(&Uniforms {
-                    matrices: {
-                        let view_matrix = {
-                            Mat4::look_at_rh(
-                                player_position_3d + player_height_offset + state.orbit.as_vector(),
-                                player_position_3d + player_height_offset,
-                                Vec3::Y,
-                            )
-                        };
-
-                        perspective_matrix * view_matrix
-                    },
+                bytemuck::bytes_of(&Uniforms {
+                    matrices: { left_proj * (left_inv * Mat4::from_scale(Vec3::splat(0.1))) },
                     player_position: player_position_3d,
                     player_facing: state.player_facing,
                     camera_position: player_position_3d
@@ -838,129 +678,128 @@ async fn run() {
                 }),
             );
 
-            window.request_redraw();
-        }
-        event::Event::RedrawRequested(_) => {
-            let frame = match surface.get_current_texture() {
-                Ok(frame) => frame,
-                Err(_) => {
-                    surface.configure(&device.inner, &config);
-                    surface
-                        .get_current_texture()
-                        .expect("Failed to acquire next surface texture!")
-                }
-            };
-            let view = frame
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
-
-            let mut encoder =
-                device
-                    .inner
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("command encoder"),
-                    });
-
-            let depth_texture = device.get_texture(&wgpu::TextureDescriptor {
-                size: wgpu::Extent3d {
-                    width: config.width,
-                    height: config.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Depth32Float,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                label: Some("depth texture"),
-            });
-
-            let opaque_texture = device.get_texture(&wgpu::TextureDescriptor {
-                size: wgpu::Extent3d {
-                    width: config.width,
-                    height: config.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                label: Some("opaque texture"),
-            });
-
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("main render pass"),
-                color_attachments: &[
-                    wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.1,
-                                g: 0.2,
-                                b: 0.3,
-                                a: 1.0,
-                            }),
-                            store: true,
-                        },
-                    },
-                    wgpu::RenderPassColorAttachment {
-                        view: &opaque_texture.view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.1,
-                                g: 0.2,
-                                b: 0.3,
-                                a: 1.0,
-                            }),
-                            store: true,
-                        },
-                    },
-                ],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &depth_texture.view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(0.0),
-                        store: true,
-                    }),
-                    stencil_ops: None,
+            queue.write_buffer(
+                &right_uniform_buffer,
+                0,
+                bytemuck::bytes_of(&Uniforms {
+                    matrices: { right_proj * (right_inv * Mat4::from_scale(Vec3::splat(0.1))) },
+                    player_position: player_position_3d,
+                    player_facing: state.player_facing,
+                    camera_position: player_position_3d
+                        + player_height_offset
+                        + state.orbit.as_vector(),
+                    time: state.time,
+                    window_size: Vec2::new(config.width as f32, config.height as f32),
+                    ..Default::default()
                 }),
+            );
+        }
+
+        let frame = match surface.get_current_texture() {
+            Ok(frame) => frame,
+            Err(_) => surface
+                .get_current_texture()
+                .expect("Failed to acquire next surface texture!"),
+        };
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = device
+            .inner
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("command encoder"),
             });
 
-            {
-                let formats = &[config.format, wgpu::TextureFormat::Rgba8UnormSrgb];
+        let depth_texture = device.get_texture(&wgpu::TextureDescriptor {
+            size: wgpu::Extent3d {
+                width: config.width,
+                height: config.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            label: Some("depth texture"),
+        });
 
-                let device = device.with_formats(formats, Some(wgpu::TextureFormat::Depth32Float));
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("main render pass"),
+            color_attachments: &[wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.1,
+                        g: 0.2,
+                        b: 0.3,
+                        a: 1.0,
+                    }),
+                    store: true,
+                },
+            }],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &depth_texture.view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: true,
+                }),
+                stencil_ops: None,
+            }),
+        });
 
-                let pipeline = device.get_pipeline(
-                    "plane pipeline",
-                    device.device.get_shader(
-                        "shaders/compiled/plane.vert.spv",
-                        #[cfg(feature = "standalone")]
-                        include_bytes!("../shaders/compiled/plane.vert.spv"),
-                        Default::default(),
-                    ),
-                    device.device.get_shader(
-                        "shaders/compiled/plane.frag.spv",
-                        #[cfg(feature = "standalone")]
-                        include_bytes!("../shaders/compiled/plane.frag.spv"),
-                        Default::default(),
-                    ),
-                    RenderPipelineDesc {
-                        ..Default::default()
-                    },
-                    BASIC_FORMAT,
+        let uniform_buffer = |i| {
+            BindingResource::Buffer(if i == 0 {
+                &uniform_buffer
+            } else {
+                &right_uniform_buffer
+            })
+        };
+
+        {
+            let formats = &[config.format];
+
+            let device = device.with_formats(formats, Some(wgpu::TextureFormat::Depth32Float));
+
+            let pipeline = device.get_pipeline(
+                "plane pipeline",
+                device.device.get_shader(
+                    "shaders/compiled/plane.vert.spv",
+                    #[cfg(feature = "standalone")]
+                    include_bytes!("../shaders/compiled/plane.vert.spv"),
+                    Default::default(),
+                ),
+                device.device.get_shader(
+                    "shaders/compiled/plane.frag.spv",
+                    #[cfg(feature = "standalone")]
+                    include_bytes!("../shaders/compiled/plane.frag.spv"),
+                    Default::default(),
+                ),
+                RenderPipelineDesc {
+                    depth_compare: wgpu::CompareFunction::Less,
+                    ..Default::default()
+                },
+                BASIC_FORMAT,
+            );
+
+            render_pass.set_pipeline(&pipeline.pipeline);
+
+            for (i, viewport) in viewports.iter().enumerate() {
+                render_pass.set_viewport(
+                    viewport.x,
+                    viewport.y,
+                    viewport.width,
+                    viewport.height,
+                    0.0,
+                    1.0,
                 );
-
                 let bind_group = device.get_bind_group(
-                    "plane",
+                    ("plane pipeline", i),
                     pipeline,
                     &[
-                        BindingResource::Buffer(&uniform_buffer),
+                        uniform_buffer(i),
                         BindingResource::Buffer(&meteor_buffer),
                         BindingResource::Sampler(&sampler),
                         BindingResource::Sampler(&linear_sampler),
@@ -972,17 +811,144 @@ async fn run() {
                     ],
                 );
 
-                render_pass.set_pipeline(&pipeline.pipeline);
+                render_pass.set_bind_group(0, bind_group, &[]);
+                plane.render(&mut render_pass, 1);
+            }
+
+            let pipeline = device.get_pipeline(
+                "player pipeline",
+                device.device.get_shader(
+                    "shaders/compiled/capsule.vert.spv",
+                    #[cfg(feature = "standalone")]
+                    include_bytes!("../shaders/compiled/capsule.vert.spv"),
+                    Default::default(),
+                ),
+                device.device.get_shader(
+                    "shaders/compiled/tree.frag.spv",
+                    #[cfg(feature = "standalone")]
+                    include_bytes!("../shaders/compiled/tree.frag.spv"),
+                    Default::default(),
+                ),
+                RenderPipelineDesc {
+                    depth_compare: wgpu::CompareFunction::Less,
+                    ..Default::default()
+                },
+                &[
+                    VertexBufferLayout {
+                        location: 0,
+                        format: wgpu::VertexFormat::Float32x3,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                    },
+                    VertexBufferLayout {
+                        location: 1,
+                        format: wgpu::VertexFormat::Float32x3,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                    },
+                    VertexBufferLayout {
+                        location: 2,
+                        format: wgpu::VertexFormat::Float32x2,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                    },
+                    VertexBufferLayout {
+                        location: 3,
+                        format: wgpu::VertexFormat::Uint16x4,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                    },
+                    VertexBufferLayout {
+                        location: 4,
+                        format: wgpu::VertexFormat::Float32x4,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                    },
+                ],
+            );
+
+            render_pass.set_pipeline(&pipeline.pipeline);
+
+            render_pass.set_vertex_buffer(3, capsule.joints.slice(..));
+            render_pass.set_vertex_buffer(4, capsule.weights.slice(..));
+
+            for (i, viewport) in viewports.iter().enumerate() {
+                render_pass.set_viewport(
+                    viewport.x,
+                    viewport.y,
+                    viewport.width,
+                    viewport.height,
+                    0.0,
+                    1.0,
+                );
+
+                let bind_group = device.get_bind_group(
+                    ("capsule", i),
+                    pipeline,
+                    &[
+                        uniform_buffer(i),
+                        BindingResource::Buffer(&meteor_buffer),
+                        BindingResource::Sampler(&sampler),
+                        BindingResource::Texture(&giant_tex),
+                        BindingResource::Buffer(&joint_transforms_buffer),
+                    ],
+                );
+
                 render_pass.set_bind_group(0, bind_group, &[]);
 
-                plane.render(&mut render_pass, 1);
+                capsule.render(&mut render_pass, 1);
+            }
 
+            let pipeline = device.get_pipeline(
+                "meteor pipeline",
+                device.device.get_shader(
+                    "shaders/compiled/meteor.vert.spv",
+                    #[cfg(feature = "standalone")]
+                    include_bytes!("../shaders/compiled/meteor.vert.spv"),
+                    Default::default(),
+                ),
+                device.device.get_shader(
+                    "shaders/compiled/meteor.frag.spv",
+                    #[cfg(feature = "standalone")]
+                    include_bytes!("../shaders/compiled/meteor.frag.spv"),
+                    Default::default(),
+                ),
+                RenderPipelineDesc {
+                    depth_compare: wgpu::CompareFunction::Less,
+                    ..Default::default()
+                },
+                BASIC_FORMAT,
+            );
+
+            render_pass.set_pipeline(&pipeline.pipeline);
+
+            for (i, viewport) in viewports.iter().enumerate() {
+                render_pass.set_viewport(
+                    viewport.x,
+                    viewport.y,
+                    viewport.width,
+                    viewport.height,
+                    0.0,
+                    1.0,
+                );
+
+                let bind_group = device.get_bind_group(
+                    ("meteor", i),
+                    pipeline,
+                    &[
+                        uniform_buffer(i),
+                        BindingResource::Buffer(&meteor_buffer),
+                        BindingResource::Sampler(&sampler),
+                        BindingResource::Texture(&meteor_tex),
+                    ],
+                );
+                render_pass.set_bind_group(0, bind_group, &[]);
+
+                meteor.render(&mut render_pass, 1);
+            }
+
+            {
                 let pipeline = device.get_pipeline(
-                    "player pipeline",
+                    "trees pipeline",
                     device.device.get_shader(
-                        "shaders/compiled/capsule.vert.spv",
+                        "shaders/compiled/tree.vert.spv",
                         #[cfg(feature = "standalone")]
-                        include_bytes!("../shaders/compiled/capsule.vert.spv"),
+                        include_bytes!("../shaders/compiled/tree.vert.spv"),
                         Default::default(),
                     ),
                     device.device.get_shader(
@@ -992,329 +958,218 @@ async fn run() {
                         Default::default(),
                     ),
                     RenderPipelineDesc {
+                        depth_compare: wgpu::CompareFunction::Less,
                         ..Default::default()
                     },
-                    &[
-                        VertexBufferLayout {
-                            location: 0,
-                            format: wgpu::VertexFormat::Float32x3,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                        },
-                        VertexBufferLayout {
-                            location: 1,
-                            format: wgpu::VertexFormat::Float32x3,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                        },
-                        VertexBufferLayout {
-                            location: 2,
-                            format: wgpu::VertexFormat::Float32x2,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                        },
-                        VertexBufferLayout {
-                            location: 3,
-                            format: wgpu::VertexFormat::Uint16x4,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                        },
-                        VertexBufferLayout {
-                            location: 4,
-                            format: wgpu::VertexFormat::Float32x4,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                        },
-                    ],
-                );
-
-                let bind_group = device.get_bind_group(
-                    "capsule",
-                    pipeline,
-                    &[
-                        BindingResource::Buffer(&uniform_buffer),
-                        BindingResource::Buffer(&meteor_buffer),
-                        BindingResource::Sampler(&sampler),
-                        BindingResource::Texture(&giant_tex),
-                        BindingResource::Buffer(&joint_transforms_buffer),
-                    ],
+                    INSTANCED_FORMAT,
                 );
 
                 render_pass.set_pipeline(&pipeline.pipeline);
-                render_pass.set_bind_group(0, bind_group, &[]);
 
-                render_pass.set_vertex_buffer(3, capsule.joints.slice(..));
-                render_pass.set_vertex_buffer(4, capsule.weights.slice(..));
-                capsule.render(&mut render_pass, 1);
+                render_pass.set_vertex_buffer(3, forest_points.slice(..));
 
+                for (i, viewport) in viewports.iter().enumerate() {
+                    render_pass.set_viewport(
+                        viewport.x,
+                        viewport.y,
+                        viewport.width,
+                        viewport.height,
+                        0.0,
+                        1.0,
+                    );
+
+                    let bind_group = device.get_bind_group(
+                        ("trees", i),
+                        pipeline,
+                        &[
+                            uniform_buffer(i),
+                            BindingResource::Buffer(&meteor_buffer),
+                            BindingResource::Sampler(&sampler),
+                            BindingResource::Texture(&forest_texture),
+                        ],
+                    );
+                    render_pass.set_bind_group(0, bind_group, &[]);
+
+                    tree.render(&mut render_pass, num_forest_points);
+                }
+            }
+
+            {
                 let pipeline = device.get_pipeline(
-                    "meteor pipeline",
+                    "house pipeline",
                     device.device.get_shader(
-                        "shaders/compiled/meteor.vert.spv",
+                        "shaders/compiled/house.vert.spv",
                         #[cfg(feature = "standalone")]
-                        include_bytes!("../shaders/compiled/meteor.vert.spv"),
+                        include_bytes!("../shaders/compiled/house.vert.spv"),
                         Default::default(),
                     ),
                     device.device.get_shader(
-                        "shaders/compiled/meteor.frag.spv",
+                        "shaders/compiled/tree.frag.spv",
                         #[cfg(feature = "standalone")]
-                        include_bytes!("../shaders/compiled/meteor.frag.spv"),
+                        include_bytes!("../shaders/compiled/tree.frag.spv"),
                         Default::default(),
                     ),
                     RenderPipelineDesc {
+                        depth_compare: wgpu::CompareFunction::Less,
                         ..Default::default()
                     },
-                    BASIC_FORMAT,
+                    INSTANCED_FORMAT,
+                );
+
+                render_pass.set_pipeline(&pipeline.pipeline);
+
+                render_pass.set_vertex_buffer(3, house_points.slice(..));
+
+                for (i, viewport) in viewports.iter().enumerate() {
+                    render_pass.set_viewport(
+                        viewport.x,
+                        viewport.y,
+                        viewport.width,
+                        viewport.height,
+                        0.0,
+                        1.0,
+                    );
+
+                    let bind_group = device.get_bind_group(
+                        ("house", i),
+                        pipeline,
+                        &[
+                            uniform_buffer(i),
+                            BindingResource::Buffer(&meteor_buffer),
+                            BindingResource::Sampler(&sampler),
+                            BindingResource::Texture(&house_texture),
+                        ],
+                    );
+                    render_pass.set_bind_group(0, bind_group, &[]);
+
+                    house.render(&mut render_pass, num_house_points);
+                }
+            }
+
+            let pipeline = device.get_pipeline(
+                "meteor outline pipeline",
+                device.device.get_shader(
+                    "shaders/compiled/meteor_outline.vert.spv",
+                    #[cfg(feature = "standalone")]
+                    include_bytes!("../shaders/compiled/meteor_outline.vert.spv"),
+                    Default::default(),
+                ),
+                device.device.get_shader(
+                    "shaders/compiled/meteor_outline.frag.spv",
+                    #[cfg(feature = "standalone")]
+                    include_bytes!("../shaders/compiled/meteor_outline.frag.spv"),
+                    Default::default(),
+                ),
+                RenderPipelineDesc {
+                    depth_compare: wgpu::CompareFunction::Less,
+
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    ..Default::default()
+                },
+                BASIC_FORMAT,
+            );
+
+            render_pass.set_pipeline(&pipeline.pipeline);
+
+            for (i, viewport) in viewports.iter().enumerate() {
+                render_pass.set_viewport(
+                    viewport.x,
+                    viewport.y,
+                    viewport.width,
+                    viewport.height,
+                    0.0,
+                    1.0,
                 );
 
                 let bind_group = device.get_bind_group(
-                    "meteor",
+                    ("meteor outline", i),
                     pipeline,
                     &[
-                        BindingResource::Buffer(&uniform_buffer),
+                        uniform_buffer(i),
                         BindingResource::Buffer(&meteor_buffer),
                         BindingResource::Sampler(&sampler),
                         BindingResource::Texture(&meteor_tex),
                     ],
                 );
 
-                render_pass.set_pipeline(&pipeline.pipeline);
                 render_pass.set_bind_group(0, bind_group, &[]);
 
                 meteor.render(&mut render_pass, 1);
-
-                {
-                    let pipeline = device.get_pipeline(
-                        "trees pipeline",
-                        device.device.get_shader(
-                            "shaders/compiled/tree.vert.spv",
-                            #[cfg(feature = "standalone")]
-                            include_bytes!("../shaders/compiled/tree.vert.spv"),
-                            Default::default(),
-                        ),
-                        device.device.get_shader(
-                            "shaders/compiled/tree.frag.spv",
-                            #[cfg(feature = "standalone")]
-                            include_bytes!("../shaders/compiled/tree.frag.spv"),
-                            Default::default(),
-                        ),
-                        RenderPipelineDesc {
-                            ..Default::default()
-                        },
-                        INSTANCED_FORMAT,
-                    );
-
-                    let bind_group = device.get_bind_group(
-                        "trees",
-                        pipeline,
-                        &[
-                            BindingResource::Buffer(&uniform_buffer),
-                            BindingResource::Buffer(&meteor_buffer),
-                            BindingResource::Sampler(&sampler),
-                            BindingResource::Texture(&forest_texture),
-                        ],
-                    );
-
-                    render_pass.set_pipeline(&pipeline.pipeline);
-                    render_pass.set_bind_group(0, bind_group, &[]);
-
-                    render_pass.set_vertex_buffer(3, forest_points.slice(..));
-                    tree.render(&mut render_pass, num_forest_points);
-                }
-
-                {
-                    let pipeline = device.get_pipeline(
-                        "house pipeline",
-                        device.device.get_shader(
-                            "shaders/compiled/house.vert.spv",
-                            #[cfg(feature = "standalone")]
-                            include_bytes!("../shaders/compiled/house.vert.spv"),
-                            Default::default(),
-                        ),
-                        device.device.get_shader(
-                            "shaders/compiled/tree.frag.spv",
-                            #[cfg(feature = "standalone")]
-                            include_bytes!("../shaders/compiled/tree.frag.spv"),
-                            Default::default(),
-                        ),
-                        RenderPipelineDesc {
-                            ..Default::default()
-                        },
-                        INSTANCED_FORMAT,
-                    );
-
-                    let bind_group = device.get_bind_group(
-                        "house",
-                        pipeline,
-                        &[
-                            BindingResource::Buffer(&uniform_buffer),
-                            BindingResource::Buffer(&meteor_buffer),
-                            BindingResource::Sampler(&sampler),
-                            BindingResource::Texture(&house_texture),
-                        ],
-                    );
-
-                    render_pass.set_pipeline(&pipeline.pipeline);
-                    render_pass.set_bind_group(0, bind_group, &[]);
-
-                    render_pass.set_vertex_buffer(3, house_points.slice(..));
-                    house.render(&mut render_pass, num_house_points);
-                }
             }
 
-            drop(render_pass);
+            let pipeline = device.get_pipeline(
+                "bounce sphere pipeline",
+                device.device.get_shader(
+                    "shaders/compiled/bounce_sphere.vert.spv",
+                    #[cfg(feature = "standalone")]
+                    include_bytes!("../shaders/compiled/bounce_sphere.vert.spv"),
+                    Default::default(),
+                ),
+                device.device.get_shader(
+                    "shaders/compiled/bounce_sphere.frag.spv",
+                    #[cfg(feature = "standalone")]
+                    include_bytes!("../shaders/compiled/bounce_sphere.frag.spv"),
+                    Default::default(),
+                ),
+                RenderPipelineDesc {
+                    depth_compare: wgpu::CompareFunction::Less,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
 
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("transmissiion render pass"),
-                color_attachments: &[wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: true,
-                    },
-                }],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &depth_texture.view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: true,
-                    }),
-                    stencil_ops: None,
-                }),
-            });
+                    ..Default::default()
+                },
+                BASIC_FORMAT,
+            );
 
-            {
-                let formats = &[config.format];
+            render_pass.set_pipeline(&pipeline.pipeline);
 
-                let device = device.with_formats(formats, Some(wgpu::TextureFormat::Depth32Float));
-
-                let pipeline = device.get_pipeline(
-                    "water pipeline",
-                    device.device.get_shader(
-                        "shaders/compiled/plane.vert.spv",
-                        #[cfg(feature = "standalone")]
-                        include_bytes!("../shaders/compiled/plane.vert.spv"),
-                        Default::default(),
-                    ),
-                    device.device.get_shader(
-                        "shaders/compiled/water.frag.spv",
-                        #[cfg(feature = "standalone")]
-                        include_bytes!("../shaders/compiled/water.frag.spv"),
-                        BindGroupLayoutSettings {
-                            allow_texture_filtering: false,
-                        },
-                    ),
-                    RenderPipelineDesc {
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        ..Default::default()
-                    },
-                    BASIC_FORMAT,
-                );
-
-                let height_map = device
-                    .device
-                    .try_get_cached_texture("height map")
-                    .expect("Failed to get cached texture.");
-
-                let bind_group = device.get_bind_group(
-                    "water",
-                    pipeline,
-                    &[
-                        BindingResource::Buffer(&uniform_buffer),
-                        BindingResource::Texture(opaque_texture),
-                        BindingResource::Sampler(&sampler),
-                        BindingResource::Texture(height_map),
-                        BindingResource::Buffer(&meteor_buffer),
-                    ],
-                );
-
-                render_pass.set_pipeline(&pipeline.pipeline);
-                render_pass.set_bind_group(0, bind_group, &[]);
-
-                water.render(&mut render_pass, 1);
-
-                {
-                    let pipeline = device.get_pipeline(
-                        "meteor outline pipeline",
-                        device.device.get_shader(
-                            "shaders/compiled/meteor_outline.vert.spv",
-                            #[cfg(feature = "standalone")]
-                            include_bytes!("../shaders/compiled/meteor_outline.vert.spv"),
-                            Default::default(),
-                        ),
-                        device.device.get_shader(
-                            "shaders/compiled/meteor_outline.frag.spv",
-                            #[cfg(feature = "standalone")]
-                            include_bytes!("../shaders/compiled/meteor_outline.frag.spv"),
-                            Default::default(),
-                        ),
-                        RenderPipelineDesc {
-                            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                            ..Default::default()
-                        },
-                        BASIC_FORMAT,
-                    );
-
-                    let bind_group = device.get_bind_group(
-                        "meteor outline",
-                        pipeline,
-                        &[
-                            BindingResource::Buffer(&uniform_buffer),
-                            BindingResource::Buffer(&meteor_buffer),
-                            BindingResource::Sampler(&sampler),
-                            BindingResource::Texture(&meteor_tex),
-                        ],
-                    );
-
-                    render_pass.set_pipeline(&pipeline.pipeline);
-                    render_pass.set_bind_group(0, bind_group, &[]);
-
-                    meteor.render(&mut render_pass, 1);
-                }
-
-                let pipeline = device.get_pipeline(
-                    "bounce sphere pipeline",
-                    device.device.get_shader(
-                        "shaders/compiled/bounce_sphere.vert.spv",
-                        #[cfg(feature = "standalone")]
-                        include_bytes!("../shaders/compiled/bounce_sphere.vert.spv"),
-                        Default::default(),
-                    ),
-                    device.device.get_shader(
-                        "shaders/compiled/bounce_sphere.frag.spv",
-                        #[cfg(feature = "standalone")]
-                        include_bytes!("../shaders/compiled/bounce_sphere.frag.spv"),
-                        Default::default(),
-                    ),
-                    RenderPipelineDesc {
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-
-                        ..Default::default()
-                    },
-                    BASIC_FORMAT,
+            for (i, viewport) in viewports.iter().enumerate() {
+                render_pass.set_viewport(
+                    viewport.x,
+                    viewport.y,
+                    viewport.width,
+                    viewport.height,
+                    0.0,
+                    1.0,
                 );
 
                 let bind_group = device.get_bind_group(
-                    "bounce sphere",
+                    ("bounce sphere", i),
                     pipeline,
                     &[
-                        BindingResource::Buffer(&uniform_buffer),
+                        uniform_buffer(i),
                         BindingResource::Buffer(&bounce_sphere_buffer),
                     ],
                 );
 
-                render_pass.set_pipeline(&pipeline.pipeline);
                 render_pass.set_bind_group(0, bind_group, &[]);
 
                 bounce_sphere.render(&mut render_pass, 1);
             }
+        }
 
-            drop(render_pass);
+        // Need to reset viewport :|
+        render_pass.set_viewport(
+            0.0,
+            0.0,
+            config.width as f32,
+            config.height as f32,
+            0.0,
+            1.0,
+        );
 
-            {
+        drop(render_pass);
+
+        {
+            let scale_factor = || -> f64 { 1.0 };
+
+            let draw_text = |glyph_brush: &mut wgpu_glyph::GlyphBrush<()>| {
                 glyph_brush.queue(wgpu_glyph::Section {
                     screen_position: (16.0, 0.0),
-                    bounds: (config.width as f32, config.height as f32),
+                    bounds: (config.width as f32 / 2.0, config.height as f32),
                     text: vec![
                         wgpu_glyph::Text::new(&format!("Bounces: {}", state.bounces))
                             .with_color([0.0, 0.0, 0.0, 1.0])
-                            .with_scale(24.0 * window.scale_factor() as f32),
+                            .with_scale(24.0 * scale_factor() as f32),
                     ],
                     ..wgpu_glyph::Section::default()
                 });
@@ -1327,11 +1182,11 @@ async fn run() {
                     };
 
                     glyph_brush.queue(wgpu_glyph::Section {
-                        screen_position: (config.width as f32 / 2.0, config.height as f32 / 2.0),
-                        bounds: (config.width as f32, config.height as f32),
+                        screen_position: (config.width as f32 / 4.0, config.height as f32 / 2.0),
+                        bounds: (config.width as f32 / 2.0, config.height as f32),
                         text: vec![wgpu_glyph::Text::new(text)
                             .with_color([0.75, 0.0, 0.0, 1.0])
-                            .with_scale(96.0 * window.scale_factor() as f32)],
+                            .with_scale(96.0 * scale_factor() as f32)],
                         layout: wgpu_glyph::Layout::Wrap {
                             line_breaker: Default::default(),
                             h_align: wgpu_glyph::HorizontalAlign::Center,
@@ -1339,42 +1194,55 @@ async fn run() {
                         },
                     });
                 }
+            };
+
+            {
+                draw_text(&mut glyph_brush);
 
                 // Draw the text!
                 glyph_brush
-                    .draw_queued(
+                    .draw_queued_with_transform(
                         &device.inner,
                         &mut staging_belt,
                         &mut encoder,
                         &view,
-                        config.width,
-                        config.height,
+                        (Mat4::from_cols_array(&wgpu_glyph::orthographic_projection(
+                            config.width,
+                            config.height,
+                        )) * Mat4::from_translation(Vec3::new(
+                            config.width as f32 / 2.0,
+                            0.0,
+                            0.0,
+                        )))
+                        .to_cols_array(),
+                    )
+                    .expect("Draw queued");
+
+                draw_text(&mut glyph_brush);
+
+                glyph_brush
+                    .draw_queued_with_transform(
+                        &device.inner,
+                        &mut staging_belt,
+                        &mut encoder,
+                        &view,
+                        Mat4::from_cols_array(&wgpu_glyph::orthographic_projection(
+                            config.width,
+                            config.height,
+                        ))
+                        .to_cols_array(),
                     )
                     .expect("Draw queued");
 
                 staging_belt.finish();
             }
-
-            queue.submit(std::iter::once(encoder.finish()));
-
-            frame.present();
-
-            device.flush();
         }
-        _ => {}
-    });*/
-}
 
-fn bytes_of<T>(object: &T) -> &[u8] {
-    unsafe { std::slice::from_raw_parts(object as *const T as *const u8, std::mem::size_of::<T>()) }
-}
+        queue.submit(std::iter::once(encoder.finish()));
 
-fn cast_slice<T, E>(slice: &[T]) -> &[E] {
-    unsafe {
-        std::slice::from_raw_parts(
-            slice.as_ptr() as *const E,
-            (std::mem::size_of::<T>() * slice.len()) / std::mem::size_of::<E>(),
-        )
+        frame.present();
+
+        device.flush();
     }
 }
 
@@ -1528,7 +1396,7 @@ impl Default for State {
                 scale: 0.0,
             },
             meteor_props: MeteorProps {
-                position: Vec3::Y * 100.0,
+                position: Vec3::new(5.0, 5.0, 5.0),
                 velocity: Vec3::ZERO,
             },
             kbd: KeyboardState::default(),
@@ -1621,7 +1489,7 @@ impl State {
             self.meteor_props.velocity.z *= -1.0;
         }
 
-        self.meteor_props.position += self.meteor_props.velocity * delta_time;
+        //self.meteor_props.position += self.meteor_props.velocity * delta_time;
 
         if self.bounce_sphere_props.scale > 0.0
             && self
@@ -1687,4 +1555,39 @@ impl State {
             _ => {}
         }
     }
+}
+
+async fn get_animation_frame(
+    xr_session: &web_sys::XrSession,
+    reference_space: &web_sys::XrReferenceSpace,
+) -> (web_sys::XrSession, web_sys::XrViewerPose, f64) {
+    // 'Promisify' the request_animation_frame callback.
+    let array: js_sys::Array =
+        wasm_bindgen_futures::JsFuture::from(js_sys::Promise::new(&mut |resolve, _reject| {
+            let reference_space = reference_space.clone();
+
+            xr_session.request_animation_frame(
+                &wasm_bindgen::closure::Closure::once_into_js(
+                    move |time, frame: web_sys::XrFrame| {
+                        // We're not allowed to access the XrFrame outside the callback but we only need the session
+                        // and pose anyway.
+                        let session = frame.session();
+                        let pose = frame.get_viewer_pose(&reference_space).unwrap();
+
+                        let array = js_sys::Array::of3(&session, &pose, &time);
+                        resolve.call1(&wasm_bindgen::JsValue::NULL, &array).unwrap();
+                    },
+                )
+                .into(),
+            );
+        }))
+        .await
+        .unwrap()
+        .into();
+
+    (
+        array.get(0).into(),
+        array.get(1).into(),
+        array.get(2).as_f64().unwrap(),
+    )
 }

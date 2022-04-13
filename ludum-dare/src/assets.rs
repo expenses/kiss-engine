@@ -177,8 +177,8 @@ impl Model {
     }
 }
 
-pub(crate) fn load_image(
-    device: &Device,
+pub(crate) fn load_image<BK: Eq + Clone + std::hash::Hash>(
+    device: &Device<BK>,
     queue: &wgpu::Queue,
     bytes: &[u8],
     name: &str,
