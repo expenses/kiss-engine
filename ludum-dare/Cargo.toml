@@ -26,9 +26,12 @@ wasm-web-helpers = { path = "../wasm-web-helpers", optional = true }
 console_log = { version = "0.2.0", optional = true }
 wasm-bindgen-futures = { version = "0.4.29", optional = true }
 gltf-helpers = { path = "../gltf-helpers" }
-wasm-bindgen = "0.2.80"
+wasm-bindgen = { version = "0.2.80", features = ["serde-serialize"] }
 js-sys = "0.3.57"
 raw-window-handle = "0.4.3"
+glow = "0.11.2"
+wgpu-core = "0.12.2"
+wgpu-hal = { path = "../../../wgpu/wgpu-hal" }
 
 [dependencies.web-sys]
 version = "0.3.36"
@@ -78,6 +81,7 @@ features = [
   'XrWebGlLayerInit',
   'console',
   "HtmlButtonElement",
+  'HtmlVideoElement',
 ]
 
 [features]

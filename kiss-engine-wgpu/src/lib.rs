@@ -20,14 +20,16 @@ fn reflect_shader_stages(reflection: &rspirv_reflect::Reflection) -> wgpu::Shade
     }
 }
 
-pub struct BindGroupLayoutSettings {
+pub struct BindGroupLayoutSettings<'a> {
     pub allow_texture_filtering: bool,
+    pub external_texture_slots: &'a [u32],
 }
 
-impl Default for BindGroupLayoutSettings {
+impl Default for BindGroupLayoutSettings<'static> {
     fn default() -> Self {
         Self {
             allow_texture_filtering: true,
+            external_texture_slots: &[],
         }
     }
 }
@@ -82,13 +84,19 @@ fn reflect_bind_group_layout_entries(
                         wgpu::SamplerBindingType::NonFiltering
                     })
                 }
-                rspirv_reflect::DescriptorType::SAMPLED_IMAGE => wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float {
-                        filterable: settings.allow_texture_filtering,
-                    },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
+                rspirv_reflect::DescriptorType::SAMPLED_IMAGE => {
+                    if settings.external_texture_slots.contains(&binding) {
+                        wgpu::BindingType::ExternalTexture
+                    } else {
+                        wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float {
+                                filterable: settings.allow_texture_filtering,
+                            },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        }
+                    }
+                }
                 rspirv_reflect::DescriptorType::STORAGE_BUFFER => wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
@@ -372,6 +380,7 @@ pub enum BindingResource<'a> {
     Buffer(&'a Resource<wgpu::Buffer>),
     Sampler(&'a Resource<wgpu::Sampler>),
     Texture(&'a Resource<Texture>),
+    ExternalTexture(&'a Resource<wgpu::ExternalTexture>),
 }
 
 impl<'a> BindingResource<'a> {
@@ -380,6 +389,7 @@ impl<'a> BindingResource<'a> {
             Self::Buffer(res) => res.id,
             Self::Sampler(res) => res.id,
             Self::Texture(res) => res.id,
+            Self::ExternalTexture(res) => res.id,
         }
     }
 }
@@ -677,6 +687,9 @@ impl<'dev, 'formats, BK: Eq + Clone + std::hash::Hash + std::fmt::Debug>
                                         }
                                         BindingResource::Buffer(res) => {
                                             res.inner.as_entire_binding()
+                                        }
+                                        BindingResource::ExternalTexture(res) => {
+                                            wgpu::BindingResource::ExternalTexture(res)
                                         }
                                     },
                                 })

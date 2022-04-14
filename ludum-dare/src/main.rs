@@ -14,6 +14,7 @@ use assets::{load_image, Model};
 
 use wgpu::util::DeviceExt;
 use winit::event::VirtualKeyCode;
+use glow::HasContext;
 
 const BASIC_FORMAT: &[VertexBufferLayout] = &[
     VertexBufferLayout {
@@ -103,12 +104,29 @@ async fn run() {
     body.append_child(&web_sys::Element::from(canvas.clone()))
         .unwrap();
 
+    let video: web_sys::HtmlVideoElement = web_sys::window()
+        .unwrap()
+        .document()
+        .unwrap()
+        .create_element("video")
+        .unwrap()
+        .unchecked_into();
+
+    video.set_src("bbb.webm");
+    video.set_autoplay(true);
+    video.set_muted(true);
+    video.set_loop(true);
+
+    wasm_bindgen_futures::JsFuture::from(video.play().unwrap()).await;
+
     #[cfg(target_arch = "wasm32")]
     let webgl2_context = {
+        let mut gl_attribs = std::collections::HashMap::new();
+        gl_attribs.insert(String::from("xrCompatible"), true);
+        let js_gl_attribs = wasm_bindgen::JsValue::from_serde(&gl_attribs).unwrap();
+
         canvas
-            .get_context("webgl2")
-            .unwrap()
-            .unwrap()
+            .get_context_with_context_options("webgl2", &js_gl_attribs).unwrap().unwrap()
             .dyn_into::<web_sys::WebGl2RenderingContext>()
             .unwrap()
     };
@@ -535,9 +553,8 @@ async fn run() {
 
     let navigator: web_sys::Navigator = web_sys::window().unwrap().navigator();
 
-    let xr = navigator.xr();
+    web_sys::console::log_1(&navigator);
 
-    /*
     let button: web_sys::HtmlButtonElement = web_sys::window()
     .unwrap()
     .document()
@@ -553,14 +570,21 @@ async fn run() {
         button.set_onclick(Some(&resolve))
     }))
     .await;
-    */
+
+    let xr = navigator.xr();
+
+    log::info!("hello");
+
+    web_sys::console::log_1(&xr);
 
     let xr_session: web_sys::XrSession = wasm_bindgen_futures::JsFuture::from(
-        xr.request_session(web_sys::XrSessionMode::ImmersiveVr),
+        xr.request_session(web_sys::XrSessionMode::ImmersiveVr)
     )
     .await
     .unwrap()
     .into();
+
+    log::info!("world");
 
     let xr_gl_layer =
         web_sys::XrWebGlLayer::new_with_web_gl2_rendering_context(&xr_session, &webgl2_context)
@@ -576,6 +600,67 @@ async fn run() {
     .await
     .unwrap()
     .into();
+
+    let mut gl_tex2 = None;
+
+    unsafe {
+        device.inner.as_hal::<wgpu_hal::gles::Api, _, _>(|device| {
+            let device = device.unwrap();
+            let gl = device.glow_context();
+
+            let gl_tex = unsafe { gl.create_texture().unwrap() };
+            unsafe {
+                gl.bind_texture(glow::TEXTURE_2D, Some(gl_tex));
+                gl.tex_parameter_i32(
+                    glow::TEXTURE_2D,
+                    glow::TEXTURE_MAG_FILTER,
+                    glow::LINEAR as i32,
+                );
+                gl.tex_parameter_i32(
+                    glow::TEXTURE_2D,
+                    glow::TEXTURE_MIN_FILTER,
+                    glow::LINEAR as i32,
+                );
+            }
+
+            gl_tex2 = Some(gl_tex);
+        });
+    }
+
+    let gl_tex = gl_tex2.unwrap();
+
+    let external_texture = device.create_resource(
+        device
+            .inner
+            .create_external_texture(Some("video"), Box::new(gl_tex)),
+    );
+
+    /*{
+        let device = device.inner.clone();
+        update_video(video.clone(), move || {
+        unsafe {
+            device.as_hal::<wgpu_hal::gles::Api, _, _>(|device| {
+                let device = device.unwrap();
+
+                let gl = device.glow_context();
+
+                    gl.bind_texture(glow::TEXTURE_2D, Some(gl_tex));
+                    let level = 0;
+                    let internal_format = glow::RGBA as i32;
+                    let src_format = glow::RGBA;
+                    let src_type = glow::UNSIGNED_BYTE;
+                    gl.tex_image_2d_with_html_video(
+                        glow::TEXTURE_2D,
+                        level,
+                        internal_format,
+                        src_format,
+                        src_type,
+                        &video,
+                    );
+            });
+        }
+    });
+}*/
 
     loop {
         let (xr_session, pose, _time) = get_animation_frame(&xr_session, &reference_space).await;
@@ -713,7 +798,9 @@ async fn run() {
                 label: Some("command encoder"),
             });
 
-        let depth_texture = device.get_texture(&wgpu::TextureDescriptor {
+        log::info!("{:?}", config);
+
+        /*let depth_texture = device.get_texture(&wgpu::TextureDescriptor {
             size: wgpu::Extent3d {
                 width: config.width,
                 height: config.height,
@@ -725,9 +812,9 @@ async fn run() {
             format: wgpu::TextureFormat::Depth32Float,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             label: Some("depth texture"),
-        });
+        });*/
 
-        let opaque_texture = device.get_texture(&wgpu::TextureDescriptor {
+        /*let opaque_texture = device.get_texture(&wgpu::TextureDescriptor {
             size: wgpu::Extent3d {
                 width: config.width,
                 height: config.height,
@@ -739,7 +826,7 @@ async fn run() {
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             label: Some("opaque texture"),
-        });
+        });*/
 
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("main render pass"),
@@ -757,28 +844,9 @@ async fn run() {
                         store: true,
                     },
                 },
-                wgpu::RenderPassColorAttachment {
-                    view: &opaque_texture.view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
-                            a: 1.0,
-                        }),
-                        store: true,
-                    },
-                },
+
             ],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &depth_texture.view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: true,
-                }),
-                stencil_ops: None,
-            }),
+            depth_stencil_attachment: None,
         });
 
         let uniform_buffer = |i| {
@@ -790,9 +858,9 @@ async fn run() {
         };
 
         {
-            let formats = &[config.format, wgpu::TextureFormat::Rgba8UnormSrgb];
+            let formats = &[config.format];
 
-            let device = device.with_formats(formats, Some(wgpu::TextureFormat::Depth32Float));
+            let device = device.with_formats(formats, None);
 
             let pipeline = device.get_pipeline(
                 "plane pipeline",
@@ -806,7 +874,10 @@ async fn run() {
                     "shaders/compiled/plane.frag.spv",
                     #[cfg(feature = "standalone")]
                     include_bytes!("../shaders/compiled/plane.frag.spv"),
-                    Default::default(),
+                    BindGroupLayoutSettings {
+                        external_texture_slots: &[4],
+                        ..Default::default()
+                    },
                 ),
                 RenderPipelineDesc {
                     depth_compare: wgpu::CompareFunction::Less,
@@ -834,7 +905,8 @@ async fn run() {
                         BindingResource::Buffer(&meteor_buffer),
                         BindingResource::Sampler(&sampler),
                         BindingResource::Sampler(&linear_sampler),
-                        BindingResource::Texture(&grass_texture),
+                        //BindingResource::Texture(&grass_texture),
+                        BindingResource::ExternalTexture(&external_texture),
                         BindingResource::Texture(&sand_texture),
                         BindingResource::Texture(&rock_texture),
                         BindingResource::Texture(&forest_texture),
@@ -1090,22 +1162,15 @@ async fn run() {
                     store: true,
                 },
             }],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &depth_texture.view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: true,
-                }),
-                stencil_ops: None,
-            }),
+            depth_stencil_attachment: None,
         });
 
         {
             let formats = &[config.format];
 
-            let device = device.with_formats(formats, Some(wgpu::TextureFormat::Depth32Float));
+            let device = device.with_formats(formats, None);
 
-            let pipeline = device.get_pipeline(
+            /*let pipeline = device.get_pipeline(
                 "water pipeline",
                 device.device.get_shader(
                     "shaders/compiled/plane.vert.spv",
@@ -1119,6 +1184,7 @@ async fn run() {
                     include_bytes!("../shaders/compiled/water.frag.spv"),
                     BindGroupLayoutSettings {
                         allow_texture_filtering: false,
+                        ..Default::default()
                     },
                 ),
                 RenderPipelineDesc {
@@ -1159,7 +1225,7 @@ async fn run() {
                 render_pass.set_bind_group(0, bind_group, &[]);
 
                 water.render(&mut render_pass, 1);
-            }
+            }*/
 
             {
                 let pipeline = device.get_pipeline(
@@ -1705,4 +1771,12 @@ async fn get_animation_frame(
         array.get(1).into(),
         array.get(2).as_f64().unwrap(),
     )
+}
+
+fn update_video<F: FnOnce() + Clone + 'static>(video: web_sys::HtmlVideoElement, func: F) {
+    (func.clone())();
+
+    video.clone().request_video_frame_callback(&wasm_bindgen::closure::Closure::once_into_js(move || {
+        update_video(video, func)
+    }).into());
 }
