@@ -28,6 +28,7 @@ Out main(In input) {
     float alpha = (0.75 * (1.0 - fresnel * 0.75)) * alpha_scale_multiplier;
 
     output.color = float4(float3(0.5, 0.0, 0.5) * alpha, alpha);
+    output.color = linear_to_srgb(output.color);
     output.opaque_color = output.color;
 
     return output;

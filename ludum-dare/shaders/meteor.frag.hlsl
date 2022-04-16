@@ -19,6 +19,7 @@ Out main(In input) {
     Out output;
 
     output.color = float4(texture2.Sample(tex_sampler, input.uv), 1.0);
+    output.color = linear_to_srgb(output.color);
     output.opaque_color = output.color;
 
     return output;

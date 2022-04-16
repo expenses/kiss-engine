@@ -20,16 +20,16 @@ fn reflect_shader_stages(reflection: &rspirv_reflect::Reflection) -> wgpu::Shade
     }
 }
 
-pub struct BindGroupLayoutSettings<'a> {
+pub struct BindGroupLayoutSettings {
     pub allow_texture_filtering: bool,
-    pub external_texture_slots: &'a [u32],
+    pub external_texture_slots: Vec<u32>,
 }
 
-impl Default for BindGroupLayoutSettings<'static> {
+impl Default for BindGroupLayoutSettings {
     fn default() -> Self {
         Self {
             allow_texture_filtering: true,
-            external_texture_slots: &[],
+            external_texture_slots: Vec::new(),
         }
     }
 }
@@ -86,7 +86,8 @@ fn reflect_bind_group_layout_entries(
                 }
                 rspirv_reflect::DescriptorType::SAMPLED_IMAGE => {
                     if settings.external_texture_slots.contains(&binding) {
-                        wgpu::BindingType::ExternalTexture
+                        panic!()
+                        //wgpu::BindingType::ExternalTexture
                     } else {
                         wgpu::BindingType::Texture {
                             sample_type: wgpu::TextureSampleType::Float {
@@ -380,7 +381,7 @@ pub enum BindingResource<'a> {
     Buffer(&'a Resource<wgpu::Buffer>),
     Sampler(&'a Resource<wgpu::Sampler>),
     Texture(&'a Resource<Texture>),
-    ExternalTexture(&'a Resource<wgpu::ExternalTexture>),
+    //ExternalTexture(&'a Resource<wgpu::ExternalTexture>),
 }
 
 impl<'a> BindingResource<'a> {
@@ -389,7 +390,7 @@ impl<'a> BindingResource<'a> {
             Self::Buffer(res) => res.id,
             Self::Sampler(res) => res.id,
             Self::Texture(res) => res.id,
-            Self::ExternalTexture(res) => res.id,
+            //Self::ExternalTexture(res) => res.id,
         }
     }
 }
@@ -688,9 +689,9 @@ impl<'dev, 'formats, BK: Eq + Clone + std::hash::Hash + std::fmt::Debug>
                                         BindingResource::Buffer(res) => {
                                             res.inner.as_entire_binding()
                                         }
-                                        BindingResource::ExternalTexture(res) => {
+                                        /*BindingResource::ExternalTexture(res) => {
                                             wgpu::BindingResource::ExternalTexture(res)
-                                        }
+                                        }*/
                                     },
                                 })
                                 .collect::<Vec<_>>()

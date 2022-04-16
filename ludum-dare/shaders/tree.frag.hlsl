@@ -29,6 +29,7 @@ Out main(In input) {
     color *= shadow_factor(input.position, meteor_position);
 
     output.color = float4(color, 1.0);
+    output.color = linear_to_srgb(output.color);
     output.opaque_color = output.color;
 
 

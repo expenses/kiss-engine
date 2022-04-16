@@ -36,5 +36,10 @@ float4 main(In input): SV_Target0 {
 
     float3 transmittance = exp(-attenuation_coefficient * transmission_distance);
 
-    return float4(transmitted_light * transmittance, 1.0);
+
+    float4 output_color = float4(transmitted_light * transmittance, 1.0);
+    output_color = linear_to_srgb(output_color);
+
+
+    return output_color;
 }

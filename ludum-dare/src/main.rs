@@ -5,6 +5,7 @@ use glam::Vec3;
 use glam::Vec4;
 use kiss_engine_wgpu::{
     BindGroupLayoutSettings, BindingResource, Device, RenderPipelineDesc, VertexBufferLayout,
+    Texture,
 };
 use rand::Rng;
 
@@ -112,6 +113,7 @@ async fn run() {
     body.append_child(&web_sys::Element::from(canvas.clone()))
         .unwrap();
 
+    /*
     let video: web_sys::HtmlVideoElement = web_sys::window()
         .unwrap()
         .document()
@@ -124,6 +126,7 @@ async fn run() {
     video.set_autoplay(true);
     video.set_muted(true);
     video.set_loop(true);
+    */
 
     #[cfg(target_arch = "wasm32")]
     let webgl2_context = {
@@ -197,7 +200,7 @@ async fn run() {
         .expect("No suitable GPU adapters found on the system!");
 
     let adapter_info = adapter.get_info();
-    println!(
+    log::info!(
         "Using {} with the {:?} backend",
         adapter_info.name, adapter_info.backend
     );
@@ -241,9 +244,9 @@ async fn run() {
     ))
     .expect("Failed to load font");
 
-    let mut glyph_brush = wgpu_glyph::GlyphBrushBuilder::using_font(font)
+    /*let mut glyph_brush = wgpu_glyph::GlyphBrushBuilder::using_font(font)
         .initial_cache_size((512, 512))
-        .build(&device, wgpu::TextureFormat::Rgba8Unorm);
+        .build(&device, wgpu::TextureFormat::Rgba8Unorm);*/
 
     let mut staging_belt = wgpu::util::StagingBelt::new(1024);
 
@@ -289,150 +292,47 @@ async fn run() {
         },
     ));
 
-    let height_map = device.get_texture(&wgpu::TextureDescriptor {
-        size: wgpu::Extent3d {
-            width: 1024,
-            height: 1024,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        // Has to be rgba float because of webgl.
-        format: wgpu::TextureFormat::Rgba32Float,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
-        label: Some("height map"),
-    });
+    let heightmap_bytes = include_bytes!("../heightmap.bin");
 
-    let buffer_size = 1024 * 1024 * 4 * 4;
-
-    let target_buffer = device.inner.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: buffer_size,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-
-    {
-        let mut encoder = device
-            .inner
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("init encoder"),
-            });
-
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("init render pass"),
-            color_attachments: &[wgpu::RenderPassColorAttachment {
-                view: &height_map.view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.0,
-                        g: 0.0,
-                        b: 0.0,
-                        a: 0.0,
-                    }),
-                    store: true,
+    /*
+    let height_map = {
+        let texture = device.inner.create_texture_with_data(
+            &queue,
+            &wgpu::TextureDescriptor {
+                label: Some("height map"),
+                size: wgpu::Extent3d {
+                    width: 1024,
+                    height: 1024,
+                    depth_or_array_layers: 1,
                 },
-            }],
-            depth_stencil_attachment: None,
-        });
-
-        let device = device.with_formats(&[wgpu::TextureFormat::Rgba32Float], None);
-
-        let pipeline = device.get_pipeline(
-            "bake pipeline",
-            device.device.get_shader(
-                "shaders/compiled/bake_height_map.vert.spv",
-                #[cfg(feature = "standalone")]
-                include_bytes!("../shaders/compiled/bake_height_map.vert.spv"),
-                Default::default(),
-            ),
-            device.device.get_shader(
-                "shaders/compiled/bake_height_map.frag.spv",
-                #[cfg(feature = "standalone")]
-                include_bytes!("../shaders/compiled/bake_height_map.frag.spv"),
-                Default::default(),
-            ),
-            RenderPipelineDesc {
-                primitive: wgpu::PrimitiveState::default(),
-                ..Default::default()
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R32Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
             },
-            BASIC_FORMAT,
+            heightmap_bytes,
         );
 
-        let bind_group = device.get_bind_group(("bake height map", 0), pipeline, &[]);
-
-        render_pass.set_pipeline(&pipeline.pipeline);
-        render_pass.set_bind_group(0, bind_group, &[]);
-
-        plane.render(&mut render_pass, 1);
-
-        drop(render_pass);
-
-        encoder.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
-                texture: &height_map.texture,
-                mip_level: 0,
-                origin: Default::default(),
-                aspect: Default::default(),
-            },
-            wgpu::ImageCopyBuffer {
-                buffer: &target_buffer,
-                layout: wgpu::ImageDataLayout {
-                    bytes_per_row: Some(
-                        std::num::NonZeroU32::new(1024 * 4 * 4).expect("unreachable"),
-                    ),
-                    ..Default::default()
-                },
-            },
-            wgpu::Extent3d {
-                width: 1024,
-                height: 1024,
-                depth_or_array_layers: 1,
-            },
-        );
-
-        queue.submit(std::iter::once(encoder.finish()));
-    }
+        device.create_resource(Texture {
+            view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
+        texture,
+        })
+    };
+    */
 
     let mut rng = rand::rngs::OsRng::default();
 
     let heightmap = {
-        let slice = target_buffer.slice(..);
-
-        let map_future = slice.map_async(wgpu::MapMode::Read);
-
-        device.inner.poll(wgpu::Maintain::Wait);
-
-        map_future.await.expect("Mapping height map slice failed");
-
-        let bytes = slice.get_mapped_range();
-
-        fn cast_slice<T, F>(slice: &[T]) -> &[F] {
-            unsafe {
-                std::slice::from_raw_parts(
-                    slice.as_ptr() as *const F,
-                    (slice.len() * std::mem::size_of::<T>()) / std::mem::size_of::<F>(),
-                )
-            }
-        }
-
         // We get bytemuck alignment issues for this.
-        let vec4s: &[Vec4] = cast_slice(&bytes);
+        let floats: &[f32] = cast_slice(heightmap_bytes);
 
         HeightMap {
-            floats: vec4s.iter().map(|vec4| vec4.x).collect(),
+            floats: floats.into(),
             height: 1024,
             width: 1024,
         }
     };
-
-    target_buffer.unmap();
-
-    drop(target_buffer);
 
     let forest_map = {
         let image = image::load_from_memory(include_bytes!("../forestmap.png"))
@@ -596,6 +496,7 @@ async fn run() {
             mapped_at_creation: false,
         }));
 
+    /*
     wasm_bindgen_futures::JsFuture::from(video.play().unwrap())
         .await
         .unwrap();
@@ -631,6 +532,7 @@ async fn run() {
             .inner
             .create_external_texture(Some("video"), Box::new(gl_tex)),
     );
+    */
 
     run_rendering_loop(&xr_session, move |time, frame| {
         let xr_session: web_sys::XrSession = frame.session();
@@ -668,6 +570,7 @@ async fn run() {
         let width = base_layer.framebuffer_width() as f32;
         let height = base_layer.framebuffer_height() as f32;
 
+        /*
         unsafe {
             let device = device.inner.clone();
             device.as_hal::<wgpu_hal::gles::Api, _, _>(|device| {
@@ -690,6 +593,7 @@ async fn run() {
                 );
             });
         }
+        */
 
         // update
         {
@@ -739,11 +643,13 @@ async fn run() {
 
             let left_inv = parse_matrix(views[0].transform().inverse().matrix());
 
+            let base_transform = Mat4::from_translation(Vec3::new(0.5, -0.5, 0.5)) * Mat4::from_scale(Vec3::splat(0.1));
+
             queue.write_buffer(
                 &uniform_buffer,
                 0,
                 bytemuck::bytes_of(&Uniforms {
-                    matrices: { left_proj * (left_inv * Mat4::from_scale(Vec3::splat(0.1))) },
+                    matrices: { left_proj * (left_inv * base_transform) },
                     player_position: player_position_3d,
                     player_facing: state.player_facing,
                     camera_position: player_position_3d
@@ -763,7 +669,7 @@ async fn run() {
                     &right_uniform_buffer,
                     0,
                     bytemuck::bytes_of(&Uniforms {
-                        matrices: { right_proj * (right_inv * Mat4::from_scale(Vec3::splat(0.1))) },
+                        matrices: { right_proj * (right_inv * base_transform) },
                         player_position: player_position_3d,
                         player_facing: state.player_facing,
                         camera_position: player_position_3d
@@ -798,7 +704,7 @@ async fn run() {
         let texture = unsafe {
             device.inner.create_texture_from_hal::<wgpu_hal::gles::Api>(
                 wgpu_hal::gles::Texture {
-                    inner: wgpu_hal::gles::TextureInner::Framebuffer {
+                    inner: wgpu_hal::gles::TextureInner::RawFramebuffer {
                         inner: framebuffer.clone(),
                     },
                     mip_level_count: 1,
@@ -834,7 +740,7 @@ async fn run() {
         let depth = unsafe {
             device.inner.create_texture_from_hal::<wgpu_hal::gles::Api>(
                 wgpu_hal::gles::Texture {
-                    inner: wgpu_hal::gles::TextureInner::Framebuffer { inner: framebuffer },
+                    inner: wgpu_hal::gles::TextureInner::RawFramebuffer { inner: framebuffer },
                     mip_level_count: 1,
                     array_layer_count: 1,
                     format: wgpu::TextureFormat::Depth32Float,
@@ -947,7 +853,7 @@ async fn run() {
                     #[cfg(feature = "standalone")]
                     include_bytes!("../shaders/compiled/plane.frag.spv"),
                     BindGroupLayoutSettings {
-                        external_texture_slots: &[4],
+                        //external_texture_slots: &[4],
                         ..Default::default()
                     },
                 ),
@@ -982,8 +888,8 @@ async fn run() {
                         BindingResource::Buffer(&meteor_buffer),
                         BindingResource::Sampler(&sampler),
                         BindingResource::Sampler(&linear_sampler),
-                        //BindingResource::Texture(&grass_texture),
-                        BindingResource::ExternalTexture(&external_texture),
+                        BindingResource::Texture(&grass_texture),
+                        //BindingResource::ExternalTexture(&external_texture),
                         BindingResource::Texture(&sand_texture),
                         BindingResource::Texture(&rock_texture),
                         BindingResource::Texture(&forest_texture),
@@ -1858,6 +1764,7 @@ impl State {
     }
 }
 
+#[cfg(feature = "wasm")]
 fn create_button(text: &str) -> web_sys::HtmlButtonElement {
     use wasm_bindgen::JsCast;
 
@@ -1884,6 +1791,7 @@ fn create_button(text: &str) -> web_sys::HtmlButtonElement {
     button
 }
 
+#[cfg(feature = "wasm")]
 async fn button_click_future(button: &web_sys::HtmlButtonElement) {
     wasm_bindgen_futures::JsFuture::from(js_sys::Promise::new(&mut |resolve, _reject| {
         button.set_onclick(Some(&resolve))
@@ -1892,6 +1800,7 @@ async fn button_click_future(button: &web_sys::HtmlButtonElement) {
     .unwrap();
 }
 
+#[cfg(feature = "wasm")]
 fn run_rendering_loop<F: FnMut(f64, web_sys::XrFrame) + 'static>(
     session: &web_sys::XrSession,
     mut func: F,
@@ -1927,4 +1836,13 @@ fn run_rendering_loop<F: FnMut(f64, web_sys::XrFrame) + 'static>(
         as Box<dyn FnMut(f64, web_sys::XrFrame)>));
 
     request_animation_frame(&session, closure.borrow().as_ref().unwrap());
+}
+
+fn cast_slice<F, T>(slice: &[F]) -> &[T] {
+    unsafe {
+        std::slice::from_raw_parts(
+            slice.as_ptr() as *const T,
+            (slice.len() * std::mem::size_of::<F>()) / std::mem::size_of::<T>()
+        )
+    }
 }

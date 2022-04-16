@@ -17,7 +17,7 @@ web-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fi
 wasm-bindgen = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes-with-video-frame-callback" }
 wasm-bindgen-shared = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes-with-video-frame-callback" }
 js-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes-with-video-frame-callback" }
-glow = { path = "../glow" }
+glow = { path = "../../glow" }
 
 wgpu = { path = "../../wgpu/wgpu" }
 wgpu-core = { path = "../../wgpu/wgpu-core" }

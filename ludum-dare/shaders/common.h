@@ -11,6 +11,15 @@ float shadow_factor(float3 position, float3 meteor_position) {
     return max(smoothstep(shadow_scale * 0.9, shadow_scale * 1.1, distance(pos_2d, meteor_pos_2d)), ambient);
 }
 
+float4 linear_to_srgb(float4 linear_output) {
+    float3 color_linear = linear_output.rgb;
+    float3 selector = ceil(color_linear - 0.0031308); // 0 if under value, 1 if over
+    float3 under = 12.92 * color_linear;
+    float3 over = 1.055 * pow(color_linear, 0.41666) - 0.055;
+    float3 result = lerp(under, over, selector);
+    return float4(result, linear_output.a);
+}
+
 struct Uniforms {
     float4x4 matrices;
     float3 player_position;
