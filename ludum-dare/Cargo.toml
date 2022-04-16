@@ -32,6 +32,7 @@ raw-window-handle = "0.4.3"
 glow = "0.11.2"
 wgpu-core = "0.12.2"
 wgpu-hal = { path = "../../../wgpu/wgpu-hal" }
+futures = "0.3.21"
 
 [dependencies.web-sys]
 version = "0.3.36"

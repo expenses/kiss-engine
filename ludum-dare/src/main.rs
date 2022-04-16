@@ -12,9 +12,9 @@ mod assets;
 
 use assets::{load_image, Model};
 
+use glow::HasContext;
 use wgpu::util::DeviceExt;
 use winit::event::VirtualKeyCode;
-use glow::HasContext;
 
 const BASIC_FORMAT: &[VertexBufferLayout] = &[
     VertexBufferLayout {
@@ -84,6 +84,14 @@ async fn run() {
 
     use wasm_bindgen::JsCast;
 
+    let vr_button = create_button("Start VR");
+    let ar_button = create_button("Start AR");
+    let inline_button = create_button("Start inline rendering");
+
+    let start_vr_future = button_click_future(&vr_button);
+    let start_ar_future = button_click_future(&ar_button);
+    let start_inline_future = button_click_future(&inline_button);
+
     let canvas: web_sys::HtmlCanvasElement = web_sys::window()
         .unwrap()
         .document()
@@ -117,8 +125,6 @@ async fn run() {
     video.set_muted(true);
     video.set_loop(true);
 
-    wasm_bindgen_futures::JsFuture::from(video.play().unwrap()).await;
-
     #[cfg(target_arch = "wasm32")]
     let webgl2_context = {
         let mut gl_attribs = std::collections::HashMap::new();
@@ -126,13 +132,59 @@ async fn run() {
         let js_gl_attribs = wasm_bindgen::JsValue::from_serde(&gl_attribs).unwrap();
 
         canvas
-            .get_context_with_context_options("webgl2", &js_gl_attribs).unwrap().unwrap()
+            .get_context_with_context_options("webgl2", &js_gl_attribs)
+            .unwrap()
+            .unwrap()
             .dyn_into::<web_sys::WebGl2RenderingContext>()
             .unwrap()
     };
 
-    let backend = wgpu::util::backend_bits_from_env().unwrap_or_else(wgpu::Backends::all);
+    let navigator: web_sys::Navigator = web_sys::window().unwrap().navigator();
 
+    web_sys::console::log_1(&navigator);
+
+    let xr = navigator.xr();
+
+    web_sys::console::log_1(&xr);
+
+    use futures::FutureExt;
+
+    let mode = futures::select! {
+        _ = Box::pin(start_vr_future.fuse()) => web_sys::XrSessionMode::ImmersiveVr,
+        _ = Box::pin(start_ar_future.fuse()) => web_sys::XrSessionMode::ImmersiveAr,
+        _ = Box::pin(start_inline_future.fuse()) => web_sys::XrSessionMode::Inline,
+    };
+
+    let reference_space_type = match mode {
+        web_sys::XrSessionMode::Inline => web_sys::XrReferenceSpaceType::Viewer,
+        _ => web_sys::XrReferenceSpaceType::Local,
+    };
+
+    let xr_session: web_sys::XrSession =
+        wasm_bindgen_futures::JsFuture::from(xr.request_session(mode))
+            .await
+            .unwrap()
+            .into();
+
+    let xr_gl_layer =
+        web_sys::XrWebGlLayer::new_with_web_gl2_rendering_context(&xr_session, &webgl2_context)
+            .unwrap();
+
+    let framebuffer_height = xr_gl_layer.framebuffer_height();
+    let framebuffer_width = xr_gl_layer.framebuffer_width();
+
+    let mut render_state_init = web_sys::XrRenderStateInit::new();
+    render_state_init.base_layer(Some(&xr_gl_layer));
+    xr_session.update_render_state_with_state(&render_state_init);
+
+    let reference_space: web_sys::XrReferenceSpace = wasm_bindgen_futures::JsFuture::from(
+        xr_session.request_reference_space(reference_space_type),
+    )
+    .await
+    .unwrap()
+    .into();
+
+    let backend = wgpu::util::backend_bits_from_env().unwrap_or_else(wgpu::Backends::all);
     let instance = wgpu::Instance::new(backend);
     let surface = unsafe { instance.create_surface(&RawWindowHandle) };
     let adapter = instance
@@ -156,7 +208,11 @@ async fn run() {
                 label: Some("device"),
                 features: Default::default(),
                 #[cfg(feature = "wasm")]
-                limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                limits: wgpu::Limits {
+                    max_texture_dimension_1d: framebuffer_width.max(framebuffer_height).max(2048),
+                    max_texture_dimension_2d: framebuffer_width.max(framebuffer_height).max(2048),
+                    ..wgpu::Limits::downlevel_webgl2_defaults()
+                },
                 #[cfg(not(feature = "wasm"))]
                 limits: Default::default(),
             },
@@ -179,17 +235,6 @@ async fn run() {
 
     let (meteor, _) = Model::new(include_bytes!("../meteor.glb"), &device, "meteor");
 
-    let mut config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format: surface
-            .get_preferred_format(&adapter)
-            .expect("Failed to get preferred surface format"),
-        width: 512,
-        height: 512,
-        present_mode: wgpu::PresentMode::Fifo,
-    };
-    surface.configure(&device, &config);
-
     // Prepare glyph_brush
     let font = wgpu_glyph::ab_glyph::FontArc::try_from_slice(include_bytes!(
         "../VonwaonBitmap-16pxLite.ttf"
@@ -198,7 +243,7 @@ async fn run() {
 
     let mut glyph_brush = wgpu_glyph::GlyphBrushBuilder::using_font(font)
         .initial_cache_size((512, 512))
-        .build(&device, config.format);
+        .build(&device, wgpu::TextureFormat::Rgba8Unorm);
 
     let mut staging_belt = wgpu::util::StagingBelt::new(1024);
 
@@ -551,55 +596,9 @@ async fn run() {
             mapped_at_creation: false,
         }));
 
-    let navigator: web_sys::Navigator = web_sys::window().unwrap().navigator();
-
-    web_sys::console::log_1(&navigator);
-
-    let button: web_sys::HtmlButtonElement = web_sys::window()
-    .unwrap()
-    .document()
-    .unwrap()
-    .create_element("button")
-    .unwrap()
-    .unchecked_into();
-
-    body.append_child(&web_sys::Element::from(button.clone()))
+    wasm_bindgen_futures::JsFuture::from(video.play().unwrap())
+        .await
         .unwrap();
-
-    wasm_bindgen_futures::JsFuture::from(js_sys::Promise::new(&mut |resolve, reject| {
-        button.set_onclick(Some(&resolve))
-    }))
-    .await;
-
-    let xr = navigator.xr();
-
-    log::info!("hello");
-
-    web_sys::console::log_1(&xr);
-
-    let xr_session: web_sys::XrSession = wasm_bindgen_futures::JsFuture::from(
-        xr.request_session(web_sys::XrSessionMode::ImmersiveVr)
-    )
-    .await
-    .unwrap()
-    .into();
-
-    log::info!("world");
-
-    let xr_gl_layer =
-        web_sys::XrWebGlLayer::new_with_web_gl2_rendering_context(&xr_session, &webgl2_context)
-            .unwrap();
-
-    let mut render_state_init = web_sys::XrRenderStateInit::new();
-    render_state_init.base_layer(Some(&xr_gl_layer));
-    xr_session.update_render_state_with_state(&render_state_init);
-
-    let reference_space: web_sys::XrReferenceSpace = wasm_bindgen_futures::JsFuture::from(
-        xr_session.request_reference_space(web_sys::XrReferenceSpaceType::Local),
-    )
-    .await
-    .unwrap()
-    .into();
 
     let mut gl_tex2 = None;
 
@@ -608,20 +607,18 @@ async fn run() {
             let device = device.unwrap();
             let gl = device.glow_context();
 
-            let gl_tex = unsafe { gl.create_texture().unwrap() };
-            unsafe {
-                gl.bind_texture(glow::TEXTURE_2D, Some(gl_tex));
-                gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_MAG_FILTER,
-                    glow::LINEAR as i32,
-                );
-                gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_MIN_FILTER,
-                    glow::LINEAR as i32,
-                );
-            }
+            let gl_tex = gl.create_texture().unwrap();
+            gl.bind_texture(glow::TEXTURE_2D, Some(gl_tex));
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::LINEAR as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::LINEAR as i32,
+            );
 
             gl_tex2 = Some(gl_tex);
         });
@@ -635,35 +632,13 @@ async fn run() {
             .create_external_texture(Some("video"), Box::new(gl_tex)),
     );
 
-    /*{
-        let device = device.inner.clone();
-        update_video(video.clone(), move || {
-        unsafe {
-            device.as_hal::<wgpu_hal::gles::Api, _, _>(|device| {
-                let device = device.unwrap();
+    run_rendering_loop(&xr_session, move |time, frame| {
+        let xr_session: web_sys::XrSession = frame.session();
 
-                let gl = device.glow_context();
-
-                    gl.bind_texture(glow::TEXTURE_2D, Some(gl_tex));
-                    let level = 0;
-                    let internal_format = glow::RGBA as i32;
-                    let src_format = glow::RGBA;
-                    let src_type = glow::UNSIGNED_BYTE;
-                    gl.tex_image_2d_with_html_video(
-                        glow::TEXTURE_2D,
-                        level,
-                        internal_format,
-                        src_format,
-                        src_type,
-                        &video,
-                    );
-            });
-        }
-    });
-}*/
-
-    loop {
-        let (xr_session, pose, _time) = get_animation_frame(&xr_session, &reference_space).await;
+        let pose = match frame.get_viewer_pose(&reference_space) {
+            Some(pose) => pose,
+            None => return,
+        };
 
         let views: Vec<web_sys::XrView> = pose.views().iter().map(|view| view.into()).collect();
 
@@ -690,13 +665,30 @@ async fn run() {
 
         let base_layer = xr_session.render_state().base_layer().unwrap();
 
-        if config.width != base_layer.framebuffer_width()
-            || config.height != base_layer.framebuffer_height()
-        {
-            config.width = base_layer.framebuffer_width();
-            config.height = base_layer.framebuffer_height();
+        let width = base_layer.framebuffer_width() as f32;
+        let height = base_layer.framebuffer_height() as f32;
 
-            surface.configure(&device.inner, &config);
+        unsafe {
+            let device = device.inner.clone();
+            device.as_hal::<wgpu_hal::gles::Api, _, _>(|device| {
+                let device = device.unwrap();
+
+                let gl = device.glow_context();
+
+                gl.bind_texture(glow::TEXTURE_2D, Some(gl_tex));
+                let level = 0;
+                let internal_format = glow::RGBA as i32;
+                let src_format = glow::RGBA;
+                let src_type = glow::UNSIGNED_BYTE;
+                gl.tex_image_2d_with_html_video(
+                    glow::TEXTURE_2D,
+                    level,
+                    internal_format,
+                    src_format,
+                    src_type,
+                    &video,
+                );
+            });
         }
 
         // update
@@ -744,10 +736,8 @@ async fn run() {
             let parse_matrix = |vec| Mat4::from_cols_array(&<[f32; 16]>::try_from(vec).unwrap());
 
             let left_proj = parse_matrix(views[0].projection_matrix());
-            let right_proj = parse_matrix(views[1].projection_matrix());
 
             let left_inv = parse_matrix(views[0].transform().inverse().matrix());
-            let right_inv = parse_matrix(views[1].transform().inverse().matrix());
 
             queue.write_buffer(
                 &uniform_buffer,
@@ -760,37 +750,123 @@ async fn run() {
                         + player_height_offset
                         + state.orbit.as_vector(),
                     time: state.time,
-                    window_size: Vec2::new(config.width as f32, config.height as f32),
+                    window_size: Vec2::new(width, height),
                     ..Default::default()
                 }),
             );
 
-            queue.write_buffer(
-                &right_uniform_buffer,
-                0,
-                bytemuck::bytes_of(&Uniforms {
-                    matrices: { right_proj * (right_inv * Mat4::from_scale(Vec3::splat(0.1))) },
-                    player_position: player_position_3d,
-                    player_facing: state.player_facing,
-                    camera_position: player_position_3d
-                        + player_height_offset
-                        + state.orbit.as_vector(),
-                    time: state.time,
-                    window_size: Vec2::new(config.width as f32, config.height as f32),
-                    ..Default::default()
-                }),
-            );
+            if let Some(right_view) = views.get(1) {
+                let right_inv = parse_matrix(right_view.transform().inverse().matrix());
+                let right_proj = parse_matrix(right_view.projection_matrix());
+
+                queue.write_buffer(
+                    &right_uniform_buffer,
+                    0,
+                    bytemuck::bytes_of(&Uniforms {
+                        matrices: { right_proj * (right_inv * Mat4::from_scale(Vec3::splat(0.1))) },
+                        player_position: player_position_3d,
+                        player_facing: state.player_facing,
+                        camera_position: player_position_3d
+                            + player_height_offset
+                            + state.orbit.as_vector(),
+                        time: state.time,
+                        window_size: Vec2::new(width, height),
+                        ..Default::default()
+                    }),
+                );
+            }
         }
 
-        let frame = match surface.get_current_texture() {
-            Ok(frame) => frame,
-            Err(_) => surface
-                .get_current_texture()
-                .expect("Failed to acquire next surface texture!"),
+        let framebuffer: web_sys::WebGlFramebuffer = base_layer.framebuffer();
+
+        let opaque_texture = device.get_texture(&wgpu::TextureDescriptor {
+            size: wgpu::Extent3d {
+                width: width as u32,
+                height: height as u32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST,
+            label: Some("opaque texture"),
+        });
+
+        let texture = unsafe {
+            device.inner.create_texture_from_hal::<wgpu_hal::gles::Api>(
+                wgpu_hal::gles::Texture {
+                    inner: wgpu_hal::gles::TextureInner::Framebuffer {
+                        inner: framebuffer.clone(),
+                    },
+                    mip_level_count: 1,
+                    array_layer_count: 1,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    format_desc: wgpu_hal::gles::TextureFormatDesc {
+                        internal: glow::RGBA,
+                        external: glow::RGBA,
+                        data_type: glow::UNSIGNED_BYTE,
+                    },
+                    copy_size: wgpu_hal::CopyExtent {
+                        width: base_layer.framebuffer_width(),
+                        height: base_layer.framebuffer_height(),
+                        depth: 1,
+                    },
+                },
+                &wgpu::TextureDescriptor {
+                    label: Some("framebuffer (color)"),
+                    size: wgpu::Extent3d {
+                        width: base_layer.framebuffer_width(),
+                        height: base_layer.framebuffer_height(),
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                },
+            )
         };
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let depth = unsafe {
+            device.inner.create_texture_from_hal::<wgpu_hal::gles::Api>(
+                wgpu_hal::gles::Texture {
+                    inner: wgpu_hal::gles::TextureInner::Framebuffer { inner: framebuffer },
+                    mip_level_count: 1,
+                    array_layer_count: 1,
+                    format: wgpu::TextureFormat::Depth32Float,
+                    format_desc: wgpu_hal::gles::TextureFormatDesc {
+                        internal: glow::RGBA,
+                        external: glow::RGBA,
+                        data_type: glow::UNSIGNED_BYTE,
+                    },
+                    copy_size: wgpu_hal::CopyExtent {
+                        width: base_layer.framebuffer_width(),
+                        height: base_layer.framebuffer_height(),
+                        depth: 1,
+                    },
+                },
+                &wgpu::TextureDescriptor {
+                    label: Some("framebuffer (depth)"),
+                    size: wgpu::Extent3d {
+                        width: base_layer.framebuffer_width(),
+                        height: base_layer.framebuffer_height(),
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Depth32Float,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                },
+            )
+        };
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut encoder = device
             .inner
@@ -798,41 +874,28 @@ async fn run() {
                 label: Some("command encoder"),
             });
 
-        log::info!("{:?}", config);
-
-        /*let depth_texture = device.get_texture(&wgpu::TextureDescriptor {
-            size: wgpu::Extent3d {
-                width: config.width,
-                height: config.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            label: Some("depth texture"),
-        });*/
-
-        /*let opaque_texture = device.get_texture(&wgpu::TextureDescriptor {
-            size: wgpu::Extent3d {
-                width: config.width,
-                height: config.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            label: Some("opaque texture"),
-        });*/
-
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("main render pass"),
             color_attachments: &[
                 wgpu::RenderPassColorAttachment {
                     view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: if mode == web_sys::XrSessionMode::ImmersiveAr {
+                            wgpu::LoadOp::Load
+                        } else {
+                            wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.1,
+                                g: 0.2,
+                                b: 0.3,
+                                a: 1.0,
+                            })
+                        },
+                        store: true,
+                    },
+                },
+                /*wgpu::RenderPassColorAttachment {
+                    view: &opaque_texture.view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -843,10 +906,16 @@ async fn run() {
                         }),
                         store: true,
                     },
-                },
-
+                },*/
             ],
-            depth_stencil_attachment: None,
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: true,
+                }),
+                stencil_ops: None,
+            }),
         });
 
         let uniform_buffer = |i| {
@@ -858,9 +927,12 @@ async fn run() {
         };
 
         {
-            let formats = &[config.format];
+            let formats = &[
+                wgpu::TextureFormat::Rgba8Unorm,
+                //wgpu::TextureFormat::Rgba8Unorm,
+            ];
 
-            let device = device.with_formats(formats, None);
+            let device = device.with_formats(formats, Some(wgpu::TextureFormat::Depth32Float));
 
             let pipeline = device.get_pipeline(
                 "plane pipeline",
@@ -880,6 +952,11 @@ async fn run() {
                     },
                 ),
                 RenderPipelineDesc {
+                    primitive: wgpu::PrimitiveState {
+                        // as we're flipping things in the shaders.
+                        cull_mode: Some(wgpu::Face::Front),
+                        ..Default::default()
+                    },
                     depth_compare: wgpu::CompareFunction::Less,
                     ..Default::default()
                 },
@@ -933,6 +1010,11 @@ async fn run() {
                     Default::default(),
                 ),
                 RenderPipelineDesc {
+                    primitive: wgpu::PrimitiveState {
+                        // as we're flipping things in the shaders.
+                        cull_mode: Some(wgpu::Face::Front),
+                        ..Default::default()
+                    },
                     depth_compare: wgpu::CompareFunction::Less,
                     ..Default::default()
                 },
@@ -1012,6 +1094,11 @@ async fn run() {
                     Default::default(),
                 ),
                 RenderPipelineDesc {
+                    primitive: wgpu::PrimitiveState {
+                        // as we're flipping things in the shaders.
+                        cull_mode: Some(wgpu::Face::Front),
+                        ..Default::default()
+                    },
                     depth_compare: wgpu::CompareFunction::Less,
                     ..Default::default()
                 },
@@ -1061,6 +1148,11 @@ async fn run() {
                         Default::default(),
                     ),
                     RenderPipelineDesc {
+                        primitive: wgpu::PrimitiveState {
+                            // as we're flipping things in the shaders.
+                            cull_mode: Some(wgpu::Face::Front),
+                            ..Default::default()
+                        },
                         depth_compare: wgpu::CompareFunction::Less,
                         ..Default::default()
                     },
@@ -1113,6 +1205,11 @@ async fn run() {
                         Default::default(),
                     ),
                     RenderPipelineDesc {
+                        primitive: wgpu::PrimitiveState {
+                            // as we're flipping things in the shaders.
+                            cull_mode: Some(wgpu::Face::Front),
+                            ..Default::default()
+                        },
                         depth_compare: wgpu::CompareFunction::Less,
                         ..Default::default()
                     },
@@ -1152,8 +1249,28 @@ async fn run() {
 
         drop(render_pass);
 
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("transmissiion render pass"),
+        /*encoder.copy_texture_to_texture(
+            wgpu::ImageCopyTexture {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All
+            },
+            wgpu::ImageCopyTexture {
+                texture: &opaque_texture.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All
+            },
+            wgpu::Extent3d {
+                width: width as u32,
+                height: height as u32,
+                depth_or_array_layers: 1,
+            }
+        );*/
+
+        /*let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("transmisiion render pass"),
             color_attachments: &[wgpu::RenderPassColorAttachment {
                 view: &view,
                 resolve_target: None,
@@ -1166,11 +1283,11 @@ async fn run() {
         });
 
         {
-            let formats = &[config.format];
+            let formats = &[wgpu::TextureFormat::Rgba8Unorm];
 
             let device = device.with_formats(formats, None);
 
-            /*let pipeline = device.get_pipeline(
+            let pipeline = device.get_pipeline(
                 "water pipeline",
                 device.device.get_shader(
                     "shaders/compiled/plane.vert.spv",
@@ -1188,6 +1305,11 @@ async fn run() {
                     },
                 ),
                 RenderPipelineDesc {
+                    primitive: wgpu::PrimitiveState {
+                        // as we're flipping things in the shaders.
+                        cull_mode: Some(wgpu::Face::Front),
+                        ..Default::default()
+                    },
                     depth_compare: wgpu::CompareFunction::Less,
                     ..Default::default()
                 },
@@ -1225,7 +1347,7 @@ async fn run() {
                 render_pass.set_bind_group(0, bind_group, &[]);
 
                 water.render(&mut render_pass, 1);
-            }*/
+            }
 
             {
                 let pipeline = device.get_pipeline(
@@ -1243,6 +1365,11 @@ async fn run() {
                         Default::default(),
                     ),
                     RenderPipelineDesc {
+                        primitive: wgpu::PrimitiveState {
+                            // as we're flipping things in the shaders.
+                            cull_mode: Some(wgpu::Face::Front),
+                            ..Default::default()
+                        },
                         depth_compare: wgpu::CompareFunction::Less,
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         ..Default::default()
@@ -1294,6 +1421,11 @@ async fn run() {
                     Default::default(),
                 ),
                 RenderPipelineDesc {
+                    primitive: wgpu::PrimitiveState {
+                        // as we're flipping things in the shaders.
+                        cull_mode: Some(wgpu::Face::Front),
+                        ..Default::default()
+                    },
                     depth_compare: wgpu::CompareFunction::Less,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     ..Default::default()
@@ -1328,25 +1460,15 @@ async fn run() {
             }
         }
 
-        // Need to reset viewport :|
-        render_pass.set_viewport(
-            0.0,
-            0.0,
-            config.width as f32,
-            config.height as f32,
-            0.0,
-            1.0,
-        );
+        drop(render_pass);*/
 
-        drop(render_pass);
-
-        {
+        /*{
             let scale_factor = || -> f64 { 1.0 };
 
             let draw_text = |glyph_brush: &mut wgpu_glyph::GlyphBrush<()>| {
                 glyph_brush.queue(wgpu_glyph::Section {
                     screen_position: (16.0, 0.0),
-                    bounds: (config.width as f32 / 2.0, config.height as f32),
+                    bounds: (width as f32 / 2.0, height as f32),
                     text: vec![
                         wgpu_glyph::Text::new(&format!("Bounces: {}", state.bounces))
                             .with_color([0.0, 0.0, 0.0, 1.0])
@@ -1363,8 +1485,8 @@ async fn run() {
                     };
 
                     glyph_brush.queue(wgpu_glyph::Section {
-                        screen_position: (config.width as f32 / 4.0, config.height as f32 / 2.0),
-                        bounds: (config.width as f32 / 2.0, config.height as f32),
+                        screen_position: (width as f32 / 4.0, height as f32 / 2.0),
+                        bounds: (width as f32 / 2.0, height as f32),
                         text: vec![wgpu_glyph::Text::new(text)
                             .with_color([0.75, 0.0, 0.0, 1.0])
                             .with_scale(96.0 * scale_factor() as f32)],
@@ -1388,10 +1510,10 @@ async fn run() {
                         &mut encoder,
                         &view,
                         (Mat4::from_cols_array(&wgpu_glyph::orthographic_projection(
-                            config.width,
-                            config.height,
+                            width as u32,
+                            height as u32,
                         )) * Mat4::from_translation(Vec3::new(
-                            config.width as f32 / 2.0,
+                            width as f32 / 2.0,
                             0.0,
                             0.0,
                         )))
@@ -1408,8 +1530,8 @@ async fn run() {
                         &mut encoder,
                         &view,
                         Mat4::from_cols_array(&wgpu_glyph::orthographic_projection(
-                            config.width,
-                            config.height,
+                            width as u32,
+                            height as u32,
                         ))
                         .to_cols_array(),
                     )
@@ -1417,14 +1539,12 @@ async fn run() {
 
                 staging_belt.finish();
             }
-        }
+        }*/
 
         queue.submit(std::iter::once(encoder.finish()));
 
-        frame.present();
-
         device.flush();
-    }
+    })
 }
 
 #[derive(Default)]
@@ -1738,45 +1858,73 @@ impl State {
     }
 }
 
-async fn get_animation_frame(
-    xr_session: &web_sys::XrSession,
-    reference_space: &web_sys::XrReferenceSpace,
-) -> (web_sys::XrSession, web_sys::XrViewerPose, f64) {
-    // 'Promisify' the request_animation_frame callback.
-    let array: js_sys::Array =
-        wasm_bindgen_futures::JsFuture::from(js_sys::Promise::new(&mut |resolve, _reject| {
-            let reference_space = reference_space.clone();
+fn create_button(text: &str) -> web_sys::HtmlButtonElement {
+    use wasm_bindgen::JsCast;
 
-            xr_session.request_animation_frame(
-                &wasm_bindgen::closure::Closure::once_into_js(
-                    move |time, frame: web_sys::XrFrame| {
-                        // We're not allowed to access the XrFrame outside the callback but we only need the session
-                        // and pose anyway.
-                        let session = frame.session();
-                        let pose = frame.get_viewer_pose(&reference_space).unwrap();
-
-                        let array = js_sys::Array::of3(&session, &pose, &time);
-                        resolve.call1(&wasm_bindgen::JsValue::NULL, &array).unwrap();
-                    },
-                )
-                .into(),
-            );
-        }))
-        .await
+    let button: web_sys::HtmlButtonElement = web_sys::window()
         .unwrap()
-        .into();
+        .document()
+        .unwrap()
+        .create_element("button")
+        .unwrap()
+        .unchecked_into();
 
-    (
-        array.get(0).into(),
-        array.get(1).into(),
-        array.get(2).as_f64().unwrap(),
-    )
+    button.set_inner_text(text);
+
+    let body = web_sys::window()
+        .unwrap()
+        .document()
+        .unwrap()
+        .body()
+        .unwrap();
+
+    body.append_child(&web_sys::Element::from(button.clone()))
+        .unwrap();
+
+    button
 }
 
-fn update_video<F: FnOnce() + Clone + 'static>(video: web_sys::HtmlVideoElement, func: F) {
-    (func.clone())();
+async fn button_click_future(button: &web_sys::HtmlButtonElement) {
+    wasm_bindgen_futures::JsFuture::from(js_sys::Promise::new(&mut |resolve, _reject| {
+        button.set_onclick(Some(&resolve))
+    }))
+    .await
+    .unwrap();
+}
 
-    video.clone().request_video_frame_callback(&wasm_bindgen::closure::Closure::once_into_js(move || {
-        update_video(video, func)
-    }).into());
+fn run_rendering_loop<F: FnMut(f64, web_sys::XrFrame) + 'static>(
+    session: &web_sys::XrSession,
+    mut func: F,
+) {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::JsCast;
+
+    fn request_animation_frame(
+        session: &web_sys::XrSession,
+        f: &Closure<dyn FnMut(f64, web_sys::XrFrame)>,
+    ) -> u32 {
+        // This turns the Closure into a js_sys::Function
+        // See https://rustwasm.github.io/wasm-bindgen/api/wasm_bindgen/closure/struct.Closure.html#casting-a-closure-to-a-js_sysfunction
+        session.request_animation_frame(f.as_ref().unchecked_ref())
+    }
+
+    // Wierd hacky closure stuff that I don't understand. Taken from wasm-bindgen.
+    // TODO: link source.
+    let closure = Rc::new(RefCell::new(None));
+    let closure_clone = closure.clone();
+
+    *closure.borrow_mut() = Some(Closure::wrap(Box::new(
+        move |time: f64, frame: web_sys::XrFrame| {
+            let session = frame.session();
+
+            request_animation_frame(&session, closure_clone.borrow().as_ref().unwrap());
+
+            func(time, frame);
+        },
+    )
+        as Box<dyn FnMut(f64, web_sys::XrFrame)>));
+
+    request_animation_frame(&session, closure.borrow().as_ref().unwrap());
 }
