@@ -20,23 +20,25 @@ fn reflect_shader_stages(reflection: &rspirv_reflect::Reflection) -> wgpu::Shade
     }
 }
 
-pub struct BindGroupLayoutSettings {
+pub struct ShaderSettings {
     pub allow_texture_filtering: bool,
     pub external_texture_slots: Vec<u32>,
+    pub entry_point: &'static str,
 }
 
-impl Default for BindGroupLayoutSettings {
+impl Default for ShaderSettings {
     fn default() -> Self {
         Self {
             allow_texture_filtering: true,
             external_texture_slots: Vec::new(),
+            entry_point: "main",
         }
     }
 }
 
 fn reflect_bind_group_layout_entries(
     reflection: &rspirv_reflect::Reflection,
-    settings: &BindGroupLayoutSettings,
+    settings: &ShaderSettings,
 ) -> Vec<wgpu::BindGroupLayoutEntry> {
     let shader_stages = reflect_shader_stages(reflection);
 
@@ -215,7 +217,7 @@ fn create_render_pipeline(
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &vertex_shader.module,
-            entry_point: "main",
+            entry_point: &vertex_shader.entry_point,
             buffers: &{
                 vertex_buffer_layout
                     .iter()
@@ -230,7 +232,7 @@ fn create_render_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &fragment_shader.module,
-            entry_point: "main",
+            entry_point: &fragment_shader.entry_point,
             targets: &targets,
         }),
         primitive: render_pipeline_desc.primitive,
@@ -325,6 +327,7 @@ where
 struct Shader {
     module: wgpu::ShaderModule,
     reflected_bind_group_layout_entries: Vec<wgpu::BindGroupLayoutEntry>,
+    entry_point: &'static str,
 }
 
 impl Shader {
@@ -332,7 +335,7 @@ impl Shader {
         device: &wgpu::Device,
         filename: &str,
         bytes: &[u8],
-        bind_group_layout_settings: &BindGroupLayoutSettings,
+        settings: &ShaderSettings,
     ) -> Self {
         Self {
             module: device.create_shader_module(&wgpu::ShaderModuleDescriptor {
@@ -342,8 +345,9 @@ impl Shader {
             reflected_bind_group_layout_entries: {
                 let reflection = rspirv_reflect::Reflection::new_from_spirv(bytes)
                     .expect("Failed to create reflection from spirv bytes");
-                reflect_bind_group_layout_entries(&reflection, bind_group_layout_settings)
+                reflect_bind_group_layout_entries(&reflection, settings)
             },
+            entry_point: settings.entry_point,
         }
     }
 }
@@ -430,7 +434,7 @@ impl<BK: Eq + Clone + std::hash::Hash> Device<BK> {
     pub fn get_shader(
         &self,
         filename: &'static str,
-        bind_group_layout_settings: BindGroupLayoutSettings,
+        settings: ShaderSettings,
     ) -> &ReloadableShader {
         self.shaders.get_or_insert_with(filename, || {
             let bytes = std::fs::read(filename).expect("Failed to read shader");
@@ -440,7 +444,7 @@ impl<BK: Eq + Clone + std::hash::Hash> Device<BK> {
                     &self.inner,
                     filename,
                     &bytes,
-                    &bind_group_layout_settings,
+                    &settings,
                 )),
                 version: Default::default(),
             });
@@ -463,8 +467,7 @@ impl<BK: Eq + Clone + std::hash::Hash> Device<BK> {
                     for _ in rx.iter() {
                         log::info!("Reloading {}", filename);
                         let bytes = std::fs::read(filename).expect("Failed to reload shader");
-                        *shader.shader.lock() =
-                            Shader::load(&device, filename, &bytes, &bind_group_layout_settings);
+                        *shader.shader.lock() = Shader::load(&device, filename, &bytes, &settings);
                         shader
                             .version
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -483,7 +486,7 @@ impl<BK: Eq + Clone + std::hash::Hash> Device<BK> {
         &self,
         filename: &'static str,
         bytes: &[u8],
-        bind_group_layout_settings: BindGroupLayoutSettings,
+        settings: ShaderSettings,
     ) -> &ReloadableShader {
         self.shaders.get_or_insert_with(filename, || {
             let shader = Arc::new(ReloadableShader {
@@ -491,7 +494,7 @@ impl<BK: Eq + Clone + std::hash::Hash> Device<BK> {
                     &self.inner,
                     filename,
                     &bytes,
-                    &bind_group_layout_settings,
+                    &settings,
                 )),
                 version: Default::default(),
             });
@@ -623,6 +626,13 @@ impl<BK: Eq + Clone + std::hash::Hash> Device<BK> {
 
     pub fn try_get_cached_texture(&self, name: &'static str) -> Option<&Resource<Texture>> {
         self.textures.try_get(&name).map(|tex| &tex.texture)
+    }
+
+    pub fn create_owned_texture_resource(&self, texture: wgpu::Texture) -> Resource<Texture> {
+        self.create_resource(Texture {
+            view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
+            texture
+        })
     }
 }
 
