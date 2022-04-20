@@ -1,9 +1,10 @@
+use std::collections::BTreeMap;
 use std::sync::atomic;
 use std::sync::Arc;
 
 pub struct RenderPipeline {
     pub pipeline: wgpu::RenderPipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
+    bind_group_layouts: Vec<wgpu::BindGroupLayout>,
     shader_versions: (u32, Option<u32>),
 }
 
@@ -39,96 +40,98 @@ impl Default for ShaderSettings {
 fn reflect_bind_group_layout_entries(
     reflection: &rspirv_reflect::Reflection,
     settings: &ShaderSettings,
-) -> Vec<wgpu::BindGroupLayoutEntry> {
+) -> BTreeMap<u32, Vec<wgpu::BindGroupLayoutEntry>> {
     let shader_stages = reflect_shader_stages(reflection);
 
     let descriptor_sets = reflection
         .get_descriptor_sets()
         .expect("Failed to get descriptor sets for shader reflection");
 
-    if descriptor_sets.is_empty() {
-        return Vec::new();
-    }
-
-    if descriptor_sets.len() > 1 {
-        panic!(
-            "Expected <= 1 descriptor set; got {}",
-            descriptor_sets.len()
-        );
-    }
-
-    let descriptor_set = &descriptor_sets[&0];
-
-    descriptor_set
+    descriptor_sets
         .iter()
-        .map(|(&binding, info)| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: shader_stages,
-            count: match info.binding_count {
-                rspirv_reflect::BindingCount::One => None,
-                rspirv_reflect::BindingCount::StaticSized(size) => {
-                    Some(std::num::NonZeroU32::new(size as u32).expect("size is 0"))
-                }
-                rspirv_reflect::BindingCount::Unbounded => {
-                    unimplemented!("No good way to handle unbounded binding counts yet.")
-                }
-            },
-            ty: match info.ty {
-                rspirv_reflect::DescriptorType::UNIFORM_BUFFER => wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                rspirv_reflect::DescriptorType::SAMPLER => {
-                    wgpu::BindingType::Sampler(if settings.allow_texture_filtering {
-                        wgpu::SamplerBindingType::Filtering
-                    } else {
-                        wgpu::SamplerBindingType::NonFiltering
-                    })
-                }
-                rspirv_reflect::DescriptorType::SAMPLED_IMAGE => {
-                    if settings.external_texture_slots.contains(&binding) {
-                        panic!()
-                        //wgpu::BindingType::ExternalTexture
-                    } else {
-                        wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float {
-                                filterable: settings.allow_texture_filtering,
-                            },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
+        .map(|(location, set)| {
+            let entries = set
+                .iter()
+                .map(|(&binding, info)| wgpu::BindGroupLayoutEntry {
+                    binding,
+                    visibility: shader_stages,
+                    count: match info.binding_count {
+                        rspirv_reflect::BindingCount::One => None,
+                        rspirv_reflect::BindingCount::StaticSized(size) => {
+                            Some(std::num::NonZeroU32::new(size as u32).expect("size is 0"))
                         }
-                    }
-                }
-                rspirv_reflect::DescriptorType::STORAGE_BUFFER => wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                _ => unimplemented!("{:?}", info.ty),
-            },
+                        rspirv_reflect::BindingCount::Unbounded => {
+                            unimplemented!("No good way to handle unbounded binding counts yet.")
+                        }
+                    },
+                    ty: match info.ty {
+                        rspirv_reflect::DescriptorType::UNIFORM_BUFFER => {
+                            wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            }
+                        }
+                        rspirv_reflect::DescriptorType::SAMPLER => {
+                            wgpu::BindingType::Sampler(if settings.allow_texture_filtering {
+                                wgpu::SamplerBindingType::Filtering
+                            } else {
+                                wgpu::SamplerBindingType::NonFiltering
+                            })
+                        }
+                        rspirv_reflect::DescriptorType::SAMPLED_IMAGE => {
+                            if settings.external_texture_slots.contains(&binding) {
+                                panic!()
+                                //wgpu::BindingType::ExternalTexture
+                            } else {
+                                wgpu::BindingType::Texture {
+                                    sample_type: wgpu::TextureSampleType::Float {
+                                        filterable: settings.allow_texture_filtering,
+                                    },
+                                    view_dimension: wgpu::TextureViewDimension::D2,
+                                    multisampled: false,
+                                }
+                            }
+                        }
+                        rspirv_reflect::DescriptorType::STORAGE_BUFFER => {
+                            wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            }
+                        }
+                        _ => unimplemented!("{:?}", info.ty),
+                    },
+                })
+                .collect();
+
+            (*location, entries)
         })
         .collect()
 }
 
 fn merge_bind_group_layout_entries(
-    a: &[wgpu::BindGroupLayoutEntry],
-    b: &[wgpu::BindGroupLayoutEntry],
-) -> Vec<wgpu::BindGroupLayoutEntry> {
-    let mut merged = a.to_vec();
+    a: &BTreeMap<u32, Vec<wgpu::BindGroupLayoutEntry>>,
+    b: &BTreeMap<u32, Vec<wgpu::BindGroupLayoutEntry>>,
+) -> BTreeMap<u32, Vec<wgpu::BindGroupLayoutEntry>> {
+    let mut output = a.clone();
 
-    for merging_entry in b {
-        if let Some(entry) = merged
-            .iter_mut()
-            .find(|entry| entry.binding == merging_entry.binding)
-        {
-            entry.visibility |= merging_entry.visibility;
-        } else {
-            merged.push(*merging_entry);
+    for (location, entries) in b {
+        let merged = output.entry(*location).or_default();
+
+        for merging_entry in entries {
+            if let Some(entry) = merged
+                .iter_mut()
+                .find(|entry| entry.binding == merging_entry.binding)
+            {
+                entry.visibility |= merging_entry.visibility;
+            } else {
+                merged.push(*merging_entry);
+            }
         }
     }
 
-    merged
+    output
 }
 
 pub struct VertexBufferLayout {
@@ -173,28 +176,45 @@ impl Default for RenderPipelineDesc {
     }
 }
 
-fn create_render_pipeline(
+pub fn create_render_pipeline(
     device: &wgpu::Device,
     name: &str,
-    vertex_shader: &Shader,
-    fragment_shader: &Shader,
+    vertex_shader: &ReloadableShader,
+    fragment_shader: &ReloadableShader,
     render_pipeline_desc: RenderPipelineDesc,
     vertex_buffer_layout: &[VertexBufferLayout],
     attachment_texture_formats: &[wgpu::TextureFormat],
     depth_stencil_attachment_format: Option<wgpu::TextureFormat>,
-    shader_versions: (u32, Option<u32>),
 ) -> RenderPipeline {
-    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some(&format!("{} bind group layout", name)),
-        entries: &merge_bind_group_layout_entries(
-            &vertex_shader.reflected_bind_group_layout_entries,
-            &fragment_shader.reflected_bind_group_layout_entries,
-        ),
-    });
+    let shader_versions = (
+        vertex_shader.get_version(),
+        Some(fragment_shader.get_version()),
+    );
+
+    let vertex_shader = vertex_shader.shader.lock();
+    let fragment_shader = fragment_shader.shader.lock();
+
+    let merged_entries = merge_bind_group_layout_entries(
+        &vertex_shader.reflected_bind_group_layout_entries,
+        &fragment_shader.reflected_bind_group_layout_entries,
+    );
+
+    let bind_group_layouts: Vec<_> = merged_entries
+        .values()
+        .enumerate()
+        .map(|(i, entries)| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some(&format!("{} bind group layout {}", name, i)),
+                entries,
+            })
+        })
+        .collect();
+
+    let bind_group_layout_refs: Vec<_> = bind_group_layouts.iter().collect();
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some(&format!("{} layout", name)),
-        bind_group_layouts: &[&bind_group_layout],
+        bind_group_layouts: &bind_group_layout_refs,
         push_constant_ranges: &[],
     });
 
@@ -249,7 +269,7 @@ fn create_render_pipeline(
 
     RenderPipeline {
         pipeline: render_pipeline,
-        bind_group_layout,
+        bind_group_layouts,
         shader_versions,
     }
 }
@@ -326,7 +346,7 @@ where
 
 struct Shader {
     module: wgpu::ShaderModule,
-    reflected_bind_group_layout_entries: Vec<wgpu::BindGroupLayoutEntry>,
+    reflected_bind_group_layout_entries: BTreeMap<u32, Vec<wgpu::BindGroupLayoutEntry>>,
     entry_point: &'static str,
 }
 
@@ -409,7 +429,7 @@ struct TextureWithExtent {
     extent: wgpu::Extent3d,
 }
 
-pub struct Device<BK> {
+pub struct Device<BK = (&'static str, u32)> {
     pub inner: Arc<wgpu::Device>,
     pipelines: CacheMap<&'static str, RenderPipeline>,
     bind_groups: CacheMap<BK, BindGroup>,
@@ -522,16 +542,14 @@ impl<BK: Eq + Clone + std::hash::Hash> Device<BK> {
             create_render_pipeline(
                 &self.inner,
                 name,
-                &vertex_shader.shader.lock(),
-                &fragment_shader.shader.lock(),
+                &vertex_shader,
+                &fragment_shader,
                 render_pipeline_desc,
                 buffer_layout,
                 attachment_texture_formats,
                 depth_stencil_attachment_format,
-                shader_versions,
             )
         };
-
         let pipeline = self.pipelines.get_or_insert_with(name, pipeline_fn.clone());
 
         if pipeline.shader_versions != shader_versions {
@@ -631,7 +649,40 @@ impl<BK: Eq + Clone + std::hash::Hash> Device<BK> {
     pub fn create_owned_texture_resource(&self, texture: wgpu::Texture) -> Resource<Texture> {
         self.create_resource(Texture {
             view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
-            texture
+            texture,
+        })
+    }
+
+    pub fn create_owned_bind_group(
+        &self,
+        label: Option<&str>,
+        pipeline: &RenderPipeline,
+        bind_group_index: usize,
+        binding_resources: &[BindingResource],
+    ) -> wgpu::BindGroup {
+        self.inner.create_bind_group(&wgpu::BindGroupDescriptor {
+            label,
+            layout: &pipeline.bind_group_layouts[bind_group_index],
+            entries: &{
+                binding_resources
+                    .iter()
+                    .enumerate()
+                    .map(|(binding, res)| wgpu::BindGroupEntry {
+                        binding: binding as u32,
+                        resource: match res {
+                            BindingResource::Sampler(res) => {
+                                wgpu::BindingResource::Sampler(&res.inner)
+                            }
+                            BindingResource::Texture(res) => {
+                                wgpu::BindingResource::TextureView(&res.inner.view)
+                            }
+                            BindingResource::Buffer(res) => res.inner.as_entire_binding(), /*BindingResource::ExternalTexture(res) => {
+                                                                                               wgpu::BindingResource::ExternalTexture(res)
+                                                                                           }*/
+                        },
+                    })
+                    .collect::<Vec<_>>()
+            },
         })
     }
 }
@@ -667,6 +718,7 @@ impl<'dev, 'formats, BK: Eq + Clone + std::hash::Hash + std::fmt::Debug>
     pub fn get_bind_group(
         &self,
         key: BK,
+        bind_group_index: usize,
         pipeline: &RenderPipeline,
         binding_resources: &[BindingResource],
     ) -> &'dev wgpu::BindGroup {
@@ -682,7 +734,7 @@ impl<'dev, 'formats, BK: Eq + Clone + std::hash::Hash + std::fmt::Debug>
                     .inner
                     .create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some(&format!("{:?} bind group", key)),
-                        layout: &pipeline.bind_group_layout,
+                        layout: &pipeline.bind_group_layouts[bind_group_index],
                         entries: &{
                             binding_resources
                                 .iter()
@@ -698,10 +750,9 @@ impl<'dev, 'formats, BK: Eq + Clone + std::hash::Hash + std::fmt::Debug>
                                         }
                                         BindingResource::Buffer(res) => {
                                             res.inner.as_entire_binding()
-                                        }
-                                        /*BindingResource::ExternalTexture(res) => {
-                                            wgpu::BindingResource::ExternalTexture(res)
-                                        }*/
+                                        } /*BindingResource::ExternalTexture(res) => {
+                                              wgpu::BindingResource::ExternalTexture(res)
+                                          }*/
                                     },
                                 })
                                 .collect::<Vec<_>>()
