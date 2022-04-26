@@ -186,6 +186,43 @@ pub fn create_render_pipeline(
     attachment_texture_formats: &[wgpu::TextureFormat],
     depth_stencil_attachment_format: Option<wgpu::TextureFormat>,
 ) -> RenderPipeline {
+    let vertex_attribute_arrays = vertex_buffer_layout
+        .iter()
+        .map(|layout| layout.attribute_array())
+        .collect::<Vec<_>>();
+
+    let vertex_buffer_layout = vertex_buffer_layout
+        .iter()
+        .enumerate()
+        .map(|(i, layout)| wgpu::VertexBufferLayout {
+            array_stride: layout.format.size(),
+            step_mode: layout.step_mode,
+            attributes: &vertex_attribute_arrays[i],
+        })
+        .collect::<Vec<_>>();
+
+    create_render_pipeline_with_wgpu_vertex_buffer_layout(
+        device,
+        name,
+        vertex_shader,
+        fragment_shader,
+        render_pipeline_desc,
+        &vertex_buffer_layout,
+        attachment_texture_formats,
+        depth_stencil_attachment_format,
+    )
+}
+
+pub fn create_render_pipeline_with_wgpu_vertex_buffer_layout(
+    device: &wgpu::Device,
+    name: &str,
+    vertex_shader: &ReloadableShader,
+    fragment_shader: &ReloadableShader,
+    render_pipeline_desc: RenderPipelineDesc,
+    vertex_buffer_layout: &[wgpu::VertexBufferLayout],
+    attachment_texture_formats: &[wgpu::TextureFormat],
+    depth_stencil_attachment_format: Option<wgpu::TextureFormat>,
+) -> RenderPipeline {
     let shader_versions = (
         vertex_shader.get_version(),
         Some(fragment_shader.get_version()),
@@ -218,11 +255,6 @@ pub fn create_render_pipeline(
         push_constant_ranges: &[],
     });
 
-    let vertex_attribute_arrays = vertex_buffer_layout
-        .iter()
-        .map(|layout| layout.attribute_array())
-        .collect::<Vec<_>>();
-
     let targets: Vec<_> = attachment_texture_formats
         .iter()
         .map(|&format| wgpu::ColorTargetState {
@@ -238,17 +270,7 @@ pub fn create_render_pipeline(
         vertex: wgpu::VertexState {
             module: &vertex_shader.module,
             entry_point: &vertex_shader.entry_point,
-            buffers: &{
-                vertex_buffer_layout
-                    .iter()
-                    .enumerate()
-                    .map(|(i, layout)| wgpu::VertexBufferLayout {
-                        array_stride: layout.format.size(),
-                        step_mode: layout.step_mode,
-                        attributes: &vertex_attribute_arrays[i],
-                    })
-                    .collect::<Vec<_>>()
-            },
+            buffers: &vertex_buffer_layout,
         },
         fragment: Some(wgpu::FragmentState {
             module: &fragment_shader.module,
