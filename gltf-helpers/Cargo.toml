@@ -8,6 +8,6 @@ edition = "2021"
 [dependencies]
 bytemuck = { version = "1.9.1", features = ["derive"] }
 glam = { version = "0.20.3", features = ["bytemuck"] }
-gltf = "1.0.0"
+gltf = { version = "1.0.0",  features = ["utils", "names"], default-features = false }
 log = "0.4.16"
 ordered-float = "2.10.0"

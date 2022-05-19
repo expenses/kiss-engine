@@ -21,6 +21,7 @@ pub fn parse_url_query_string_from_window(search_key: &str) -> Option<String> {
     parse_url_query_string(&query_string, search_key).map(|string| string.to_owned())
 }
 
+#[cfg(features = "winit")]
 pub fn append_canvas(window: &winit::window::Window) {
     use winit::platform::web::WindowExtWebSys;
 
