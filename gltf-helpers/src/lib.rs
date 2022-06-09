@@ -76,7 +76,7 @@ pub struct NodeTree {
 }
 
 impl NodeTree {
-    pub fn new(nodes: gltf::iter::Nodes) -> Self {
+    pub fn new<E: gltf::json::CustomExtensions>(nodes: gltf::iter::Nodes<E>) -> Self {
         let mut inner = vec![(Similarity::IDENTITY, usize::max_value()); nodes.clone().count()];
 
         for node in nodes {
